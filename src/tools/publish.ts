@@ -27,7 +27,7 @@ import {
   normalizeServerUrl,
   readLaunchConfig,
   redact,
-} from "./runTests.js";
+} from "../bc/connection.js";
 
 // ---------------------------------------------------------------------------
 // Input schema
