@@ -57,10 +57,14 @@ export async function getBcptLogEntries(
   const url = `${base}${sep}$filter=${filter}`;
   const data = await getJson(url, creds, allowInvalidCert, fetchFn);
   return (data?.value ?? []).map((r: any): RawLogEntry => ({
-    bcptCode: r.bcptCode, bcptLineNo: r.bcptLineNo,
-    codeunitId: r.codeunitID ?? r.codeunitId, codeunitName: r.codeunitName,
-    durationMs: r.durationMin ?? r.durationMs ?? 0,
-    noOfSqlStatements: r.noOfSQLStmts ?? r.noOfSqlStatements ?? 0,
-    operation: r.operation, status: r.status, startTime: r.startTime,
+    bcptCode: r.bcptCode,
+    bcptLineNo: r.lineNumber,
+    codeunitId: r.codeunitID,
+    codeunitName: r.codeunitName,
+    durationMs: r.durationMin ?? 0,
+    noOfSqlStatements: r.numberOfSQLStmts ?? 0,
+    operation: r.operation,
+    status: r.status,
+    startTime: r.startTime,
   }));
 }

@@ -7,8 +7,8 @@ test("getBcptLogEntries calls the performancToolkit v1.0 endpoint and maps rows"
   const fetchStub = async (url) => {
     calledUrl = String(url);
     return { ok: true, json: async () => ({ value: [{
-      bcptCode: "SALES", bcptLineNo: 10000, codeunitID: 130001,
-      codeunitName: "Post Sales", durationMin: 12, noOfSQLStmts: 4,
+      bcptCode: "SALES", lineNumber: 10000, codeunitID: 130001,
+      codeunitName: "Post Sales", durationMin: 12, numberOfSQLStmts: 4,
       operation: "OnRun", status: "Success", startTime: "2026-07-10T10:00:00Z",
     }] }) };
   };
@@ -18,8 +18,8 @@ test("getBcptLogEntries calls the performancToolkit v1.0 endpoint and maps rows"
   assert.match(calledUrl, /\/BC\/api\/microsoft\/performancToolkit\/v1\.0\/companies\(cid\)\/bcptLogEntries/);
   assert.match(decodeURIComponent(calledUrl), /bcptCode eq 'SALES'/);
   assert.deepEqual(
-    { lineNo: rows[0].bcptLineNo, dur: rows[0].durationMs, sql: rows[0].noOfSqlStatements },
-    { lineNo: 10000, dur: 12, sql: 4 });
+    { lineNo: rows[0].bcptLineNo, cu: rows[0].codeunitId, dur: rows[0].durationMs, sql: rows[0].noOfSqlStatements },
+    { lineNo: 10000, cu: 130001, dur: 12, sql: 4 });
 });
 
 test("getCompanyId calls the v2.0 companies endpoint with a name filter and returns the id", async () => {
