@@ -6,7 +6,29 @@
 
 **Architecture:** Start the suite by automating BCPT test-runner **page 149002** over the **`/cs/` client-service endpoint** (a TS port of `ClientContext.ps1`'s interaction sequence); read results over the **shipped `bcptLogEntries` API**; aggregate percentiles client-side. Network-only — no Docker host, no BcContainerHelper, no custom AL. Connection/auth is reused from `runTests.ts`, lifted into a shared `src/bc/` module.
 
-**Tech Stack:** TypeScript (ESM, Node 20), `@modelcontextprotocol/sdk`, `zod`, `undici`/`fetch` for the API, `ws` for the `/cs/` transport, `vitest` (repo's existing test runner — confirm in Task 0).
+**Tech Stack:** TypeScript (ESM, Node 20), `@modelcontextprotocol/sdk`, `zod`, global `fetch` for the API, `ws` for the `/cs/` transport. Tests: **Node's built-in `node --test`** (NOT vitest — confirmed in Task 0).
+
+## Testing Conventions (authoritative — overrides any per-task snippet)
+
+The repo uses Node's built-in test runner, not vitest. Every test task follows this exactly:
+
+- Test files are **`.mjs`** under **`tests/unit/`** (e.g. `tests/unit/bcApi.test.mjs`). Pattern from `tests/unit/autodetect.test.mjs`:
+
+```js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { thing } from "../../dist/<path>.js";   // import COMPILED output, not src
+
+test("describes the behavior", () => {
+  assert.equal(actual, expected);
+});
+```
+
+- **Tests import from `dist/`**, so the source must be compiled first. `pretest:unit` already runs `npm run build`.
+- **Run a single unit file:** `npm run build && node --test tests/unit/<name>.test.mjs`
+- **Run all unit tests:** `npm run test:unit`
+- **No mocking library.** Do not use `vi.*`/`jest.*`. For code that calls `fetch`, use **dependency injection**: the function takes an optional `fetchFn = fetch` last parameter; tests pass a stub `async (url, opts) => ({ ok: true, json: async () => (...) })`. Use `node:test`'s `mock` only if injection is impossible.
+- Assertions use `node:assert/strict` (`assert.equal`, `assert.deepEqual`, `assert.match`, `assert.rejects`).
 
 ## Global Constraints
 
@@ -106,20 +128,34 @@ import {
 } from "../bc/connection.js";
 ```
 
-- [ ] **Step 3: Run existing tests to prove no behavior change.**
+- [ ] **Step 3: Add a characterization test** for two pure moved helpers (there are no existing `runTests` unit tests, so `tsc` + this new test are the guard). Create `tests/unit/connection.test.mjs`:
 
-Run: `npm test`
-Expected: the same green baseline as Task 0 Step 2 (all PASS). Any failure = the move changed behavior; fix.
+```js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { redact, normalizeServerUrl } from "../../dist/bc/connection.js";
 
-- [ ] **Step 4:** Build to confirm no dangling references.
+test("redact removes Basic auth tokens and password fields", () => {
+  assert.match(redact("Authorization: Basic YWJjOjEyMw=="), /Basic \[redacted\]/);
+  assert.equal(redact('{"password":"hunter2"}'), '{"password":"[redacted]"}');
+});
 
-Run: `npm run build`
-Expected: clean `tsc` exit 0.
+test("normalizeServerUrl adds https and applies the port", () => {
+  const u = normalizeServerUrl("bc.local", 7049);
+  assert.equal(u.protocol, "https:");
+  assert.equal(u.port, "7049");
+});
+```
+
+- [ ] **Step 4: Build, then run the new test.**
+
+Run: `npm run build && node --test tests/unit/connection.test.mjs`
+Expected: clean `tsc` exit 0; both tests PASS. (A `tsc` error means a dangling reference from the move — fix it.)
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add src/bc/connection.ts src/tools/runTests.ts
+git add src/bc/connection.ts src/tools/runTests.ts tests/unit/connection.test.mjs
 git commit -m "refactor: lift shared BC connection helpers into src/bc/connection.ts"
 ```
 
