@@ -165,47 +165,47 @@ git commit -m "refactor: lift shared BC connection helpers into src/bc/connectio
 
 **Files:**
 - Create: `src/bc/bcApi.ts`
-- Test: `tests/bcApi.test.ts`
+- Test: `tests/unit/bcApi.test.mjs`
 
 **Interfaces:**
 - Consumes: `Credentials`, `redact` from `src/bc/connection.ts`.
-- Produces:
+- Produces (each API fn takes an optional trailing `fetchFn: typeof fetch = fetch` for test injection):
   - `type RawLogEntry = { bcptCode: string; bcptLineNo: number; codeunitId: number; codeunitName: string; durationMs: number; noOfSqlStatements: number; operation: string; status: string; startTime: string; }`
-  - `getCompanyId(baseUrl: URL, instance: string, tenant: string | undefined, companyName: string, creds: Credentials, allowInvalidCert: boolean) : Promise<string>`
-  - `getBcptLogEntries(baseUrl: URL, instance: string, tenant: string | undefined, companyId: string, suiteCode: string, sinceIso: string, creds: Credentials, allowInvalidCert: boolean) : Promise<RawLogEntry[]>`
+  - `getCompanyId(baseUrl: URL, instance: string, tenant: string | undefined, companyName: string, creds: Credentials, allowInvalidCert: boolean, fetchFn?: typeof fetch) : Promise<string>`
+  - `getBcptLogEntries(baseUrl: URL, instance: string, tenant: string | undefined, companyId: string, suiteCode: string, sinceIso: string, creds: Credentials, allowInvalidCert: boolean, fetchFn?: typeof fetch) : Promise<RawLogEntry[]>`
 
-- [ ] **Step 1: Write the failing test.** Mock `fetch` and assert URL + mapping.
+- [ ] **Step 1: Write the failing test** (`node:test`, imports compiled `dist/`, injects a `fetch` stub — no mocking lib). Create `tests/unit/bcApi.test.mjs`:
 
-```ts
-import { describe, it, expect, vi } from "vitest";
-import { getBcptLogEntries } from "../src/bc/bcApi.js";
+```js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { getBcptLogEntries } from "../../dist/bc/bcApi.js";
 
-describe("getBcptLogEntries", () => {
-  it("calls the performancToolkit v1.0 endpoint and maps rows", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ value: [{
-        bcptCode: "SALES", bcptLineNo: 10000, codeunitID: 130001,
-        codeunitName: "Post Sales", durationMin: 12, noOfSQLStmts: 4,
-        operation: "OnRun", status: "Success", startTime: "2026-07-10T10:00:00Z",
-      }] }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const rows = await getBcptLogEntries(
-      new URL("https://bc.local"), "BC", "default", "cid", "SALES",
-      "2026-07-10T09:00:00Z", { username: "u", password: "p" }, false);
-    const url = fetchMock.mock.calls[0][0] as string;
-    expect(url).toContain("/BC/api/microsoft/performancToolkit/v1.0/companies(cid)/bcptLogEntries");
-    expect(url).toContain("bcptCode eq 'SALES'");
-    expect(rows[0]).toMatchObject({ bcptLineNo: 10000, durationMs: 12, noOfSqlStatements: 4 });
-  });
+test("getBcptLogEntries calls the performancToolkit v1.0 endpoint and maps rows", async () => {
+  let calledUrl = "";
+  const fetchStub = async (url) => {
+    calledUrl = String(url);
+    return { ok: true, json: async () => ({ value: [{
+      bcptCode: "SALES", bcptLineNo: 10000, codeunitID: 130001,
+      codeunitName: "Post Sales", durationMin: 12, noOfSQLStmts: 4,
+      operation: "OnRun", status: "Success", startTime: "2026-07-10T10:00:00Z",
+    }] }) };
+  };
+  const rows = await getBcptLogEntries(
+    new URL("https://bc.local"), "BC", "default", "cid", "SALES",
+    "2026-07-10T09:00:00Z", { username: "u", password: "p" }, false, fetchStub);
+  assert.match(calledUrl, /\/BC\/api\/microsoft\/performancToolkit\/v1\.0\/companies\(cid\)\/bcptLogEntries/);
+  assert.match(decodeURIComponent(calledUrl), /bcptCode eq 'SALES'/);
+  assert.deepEqual(
+    { lineNo: rows[0].bcptLineNo, dur: rows[0].durationMs, sql: rows[0].noOfSqlStatements },
+    { lineNo: 10000, dur: 12, sql: 4 });
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.**
+- [ ] **Step 2: Build, then run to verify it fails.**
 
-Run: `npx vitest run tests/bcApi.test.ts`
-Expected: FAIL — `getBcptLogEntries` not found.
+Run: `npm run build && node --test tests/unit/bcApi.test.mjs`
+Expected: build FAILs or test FAILs — `getBcptLogEntries` not found / `dist/bc/bcApi.js` missing.
 
 - [ ] **Step 3: Implement `src/bc/bcApi.ts`.** Confirm the exact JSON field names against your live API response captured in Task 1 (BC API pages camel-case the field captions; adjust the mapping if the probe shows different keys).
 
@@ -229,9 +229,9 @@ function apiBase(baseUrl: URL, instance: string, tenant?: string): string {
   return u.toString();
 }
 
-async function getJson(url: string, creds: Credentials, allowInvalidCert: boolean): Promise<any> {
+async function getJson(url: string, creds: Credentials, allowInvalidCert: boolean, fetchFn: typeof fetch = fetch): Promise<any> {
   if (allowInvalidCert) process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-  const res = await fetch(url, { headers: { Authorization: auth(creds), Accept: "application/json" } });
+  const res = await fetchFn(url, { headers: { Authorization: auth(creds), Accept: "application/json" } });
   if (!res.ok) throw new Error(redact(`BCPT API ${res.status} for ${url.split("?")[0]}`));
   return res.json();
 }
@@ -239,12 +239,13 @@ async function getJson(url: string, creds: Credentials, allowInvalidCert: boolea
 export async function getCompanyId(
   baseUrl: URL, instance: string, tenant: string | undefined,
   companyName: string, creds: Credentials, allowInvalidCert: boolean,
+  fetchFn: typeof fetch = fetch,
 ): Promise<string> {
   const u = new URL(baseUrl.toString());
   u.pathname = `/${instance}/api/v2.0/companies`;
   if (tenant) u.searchParams.set("tenant", tenant);
   u.searchParams.set("$filter", `name eq '${companyName.replace(/'/g, "''")}'`);
-  const data = await getJson(u.toString(), creds, allowInvalidCert);
+  const data = await getJson(u.toString(), creds, allowInvalidCert, fetchFn);
   const first = data?.value?.[0];
   if (!first?.id) throw new Error(`No company id for '${companyName}'.`);
   return first.id as string;
@@ -254,12 +255,13 @@ export async function getBcptLogEntries(
   baseUrl: URL, instance: string, tenant: string | undefined,
   companyId: string, suiteCode: string, sinceIso: string,
   creds: Credentials, allowInvalidCert: boolean,
+  fetchFn: typeof fetch = fetch,
 ): Promise<RawLogEntry[]> {
   const base = apiBase(baseUrl, instance, tenant);
   const sep = base.includes("?") ? "&" : "?";
   const filter = encodeURIComponent(`bcptCode eq '${suiteCode.replace(/'/g, "''")}' and startTime ge ${sinceIso}`);
   const url = `${base.replace(/\/$/, "")}/companies(${companyId})/bcptLogEntries${sep}$filter=${filter}`;
-  const data = await getJson(url, creds, allowInvalidCert);
+  const data = await getJson(url, creds, allowInvalidCert, fetchFn);
   return (data?.value ?? []).map((r: any): RawLogEntry => ({
     bcptCode: r.bcptCode, bcptLineNo: r.bcptLineNo,
     codeunitId: r.codeunitID ?? r.codeunitId, codeunitName: r.codeunitName,
@@ -270,15 +272,15 @@ export async function getBcptLogEntries(
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes.**
+- [ ] **Step 4: Build, then run to verify it passes.**
 
-Run: `npx vitest run tests/bcApi.test.ts`
+Run: `npm run build && node --test tests/unit/bcApi.test.mjs`
 Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add src/bc/bcApi.ts tests/bcApi.test.ts
+git add src/bc/bcApi.ts tests/unit/bcApi.test.mjs
 git commit -m "feat: add Performance Toolkit API client (bcptLogEntries + company id)"
 ```
 
