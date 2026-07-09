@@ -33,8 +33,10 @@ export async function getCompanyId(
   const u = new URL(baseUrl.toString());
   u.pathname = `/${instance}/api/v2.0/companies`;
   if (tenant) u.searchParams.set("tenant", tenant);
-  u.searchParams.set("$filter", `name eq '${companyName.replace(/'/g, "''")}'`);
-  const data = await getJson(u.toString(), creds, allowInvalidCert, fetchFn);
+  const base = u.toString();
+  const sep = base.includes("?") ? "&" : "?";
+  const filter = encodeURIComponent(`name eq '${companyName.replace(/'/g, "''")}'`);
+  const data = await getJson(`${base}${sep}$filter=${filter}`, creds, allowInvalidCert, fetchFn);
   const first = data?.value?.[0];
   if (!first?.id) throw new Error(`No company id for '${companyName}'.`);
   return first.id as string;
