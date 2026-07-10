@@ -71,7 +71,17 @@ Proven working headlessly (Node + `ws`), end-to-end from a script:
 - ✅ `Invoke` **SaveValue** (`namedParameters:{"value":"MCPPROBE"}`, controlPath=suite field) — accepted, no error.
 - ⚠️ `Invoke` **InvokeAction** StartNext — the EXACT real-client interaction (`controlPath:"server:c[0]/c[1]/c[1]"`, `namedParameters:{"systemAction":0,"key":null,"data":{},"repeaterControlTarget":null}`, correlated from the HAR's "nothing to run" response) is **rejected with `InteractionParameterException`** from a fresh headless session, then `InvalidSessionException`. Same path + params + valid session as the browser, so the gap is **form-state / ack-sequencing**: the browser had prior interactions and tracked `lastClientAckSequenceNumber` (beacon showed 23); the script always sends `-1` with `disableResponseSequencing:true`. SaveValue's response is `PropertyChanges`-only (no full tree to re-parse).
 
+### Ruled out (do NOT re-try — verified against the working browser frames)
+- Interaction params: byte-identical to the real StartNext (`{systemAction:0,key:null,data:{},repeaterControlTarget:null}`).
+- Control path: AC `server:c[0]/c[1]/c[1]` (real client used the AC, not the promoted arc).
+- `sessionId`: derived `company+sessionKey.upper+NAV` — server accepts it (echoed in response); SaveValue works with it.
+- `lastClientAckSequenceNumber:-1`: the real StartNext used `-1` too — ack-sequencing is NOT the cause.
+- Form context: headless `OpenSession(OpenForm page=149002)` opens ONLY the card (no role-center 53/54), with or without `runinframe=1`; adding `secondaryOpenFormIds` didn't help.
+- Startup `InvokeSessionAction` 810/670 handshake after OpenSession: sent (accepted), StartNext still fails.
+- Still → `InteractionParameterException` then `InvalidSessionException`. Every observable frame field now matches the working browser; the cause is in the client's internal form-state model (control activation / PropertyChanges application / invokability), not any wire field we can copy.
+
 ### Remaining work to make StartNext land
+The cause is a **form-interaction precondition** the browser satisfies implicitly. Next, port `ClientContext.ps1`'s model faithfully: apply the server's `PropertyChanges` to a local form-state model, `ActivateControl`/focus the field before `SaveValue`, honor callback acks, and possibly send the startup `InvokeSessionAction`s (810/670) the real client sent right after OpenSession before invoking page actions. This is methodical model-porting, not parameter guessing.
 Implement proper response/ack sequencing: track the server's response sequence numbers and send a real `lastClientAckSequenceNumber` (don't hardcode -1), and/or apply the SaveValue `PropertyChanges` to a local form model so the action's control state is current. This is the machinery `ClientContext.ps1` (BcContainerHelper) implements — port that ack/state handling. Scripts: `scratchpad/run-bcpt.mjs` (works through SaveValue), `scratchpad/handshake.mjs`.
 
 ## CAVEATS (verified live)
