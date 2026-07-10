@@ -20,6 +20,9 @@ test("aggregate computes per-line count/min/max/avg and percentiles", () => {
   assert.equal(l.durationAvgMs, 40);
   assert.equal(l.durationP50Ms, 30);
   assert.equal(l.durationP90Ms, 100);
+  assert.equal(l.durationP95Ms, 100);
+  assert.equal(l.sqlStatementsAvg, 2); // sql values 0,1,2,3,4 -> avg 2
+  assert.equal(r.queryMs, 5000);
 });
 
 test("aggregate flags failure on non-Success status and empty runs", () => {

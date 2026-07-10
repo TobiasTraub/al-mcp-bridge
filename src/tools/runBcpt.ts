@@ -11,7 +11,7 @@ export type BcptLineResult = {
 };
 
 export type RunBcptResult = {
-  succeeded: boolean; suiteCode: string; durationMs: number;
+  succeeded: boolean; suiteCode: string; queryMs: number;   // wall time of the API read, NOT the BCPT run duration
   totalOperations: number; lines: BcptLineResult[];
   warnings: string[]; message: string;
 };
@@ -23,7 +23,7 @@ function percentile(sorted: number[], p: number): number {
 }
 
 export function aggregate(
-  suiteCode: string, entries: RawLogEntry[], wallMs: number, warnings: string[],
+  suiteCode: string, entries: RawLogEntry[], queryMs: number, warnings: string[],
 ): RunBcptResult {
   const byLine = new Map<number, RawLogEntry[]>();
   for (const e of entries) {
@@ -52,8 +52,8 @@ export function aggregate(
   const totalOperations = entries.length;
   const message = entries.length === 0
     ? `BCPT run for '${suiteCode}' produced no log entries.`
-    : `${totalOperations} operations across ${lines.length} line(s) in ${wallMs}ms${anyFailure ? " (with failures)" : ""}.`;
-  return { succeeded, suiteCode, durationMs: wallMs, totalOperations, lines, warnings, message };
+    : `${totalOperations} operations across ${lines.length} line(s)${anyFailure ? " (with failures)" : ""} (read in ${queryMs}ms).`;
+  return { succeeded, suiteCode, queryMs, totalOperations, lines, warnings, message };
 }
 
 // ---------------------------------------------------------------------------
