@@ -470,6 +470,12 @@ export function createRunBcpt(primaryWorkspace: string) {
     const company = input.company ?? cfg.startupCompany ?? "";
     const allowInvalidCert = input.allowInvalidCert === true || process.env.BC_ALLOW_INVALID_CERT === "1" || cfg.validateServerCertificate === false;
     const timeoutMs = (input.timeoutSeconds ?? 900) * 1000;
+    // The BC API/OData is served under a different instance than launch.json's dev tier.
+    // Verified live on bench-test-28-2: the dev instance is "<base>-dev" and the API lives
+    // at "<base>-rest" (the dev instance returns 503 for /api). On a vanilla single-instance
+    // container both share the same instance. Derive accordingly; allow an explicit override.
+    const apiInstance = process.env.BC_BCPT_API_INSTANCE?.trim()
+      || (cfg.serverInstance.endsWith("-dev") ? cfg.serverInstance.replace(/-dev$/, "-rest") : cfg.serverInstance);
     const lockKey = `${serverUrl.origin.toLowerCase()}|${cfg.serverInstance.toLowerCase()}|${cfg.tenant ?? ""}`;
 
     return withHubLock(lockKey, async () => {
@@ -477,8 +483,8 @@ export function createRunBcpt(primaryWorkspace: string) {
       const sinceIso = new Date(t0).toISOString();
       try {
         await startBcptRun({ serverUrl, instance: cfg.serverInstance, tenant: cfg.tenant, company, creds, allowInvalidCert, suiteCode: input.suiteCode, timeoutMs });
-        const companyId = await getCompanyId(serverUrl, cfg.serverInstance, cfg.tenant, company, creds, allowInvalidCert);
-        const entries = await getBcptLogEntries(serverUrl, cfg.serverInstance, cfg.tenant, companyId, input.suiteCode, sinceIso, creds, allowInvalidCert);
+        const companyId = await getCompanyId(serverUrl, apiInstance, cfg.tenant, company, creds, allowInvalidCert);
+        const entries = await getBcptLogEntries(serverUrl, apiInstance, cfg.tenant, companyId, input.suiteCode, sinceIso, creds, allowInvalidCert);
         return aggregate(input.suiteCode, entries, Date.now() - t0, warnings);
       } catch (err) {
         throw new Error(redact(err instanceof Error ? err.message : String(err)));
