@@ -84,6 +84,20 @@ Proven working headlessly (Node + `ws`), end-to-end from a script:
 The cause is a **form-interaction precondition** the browser satisfies implicitly. Next, port `ClientContext.ps1`'s model faithfully: apply the server's `PropertyChanges` to a local form-state model, `ActivateControl`/focus the field before `SaveValue`, honor callback acks, and possibly send the startup `InvokeSessionAction`s (810/670) the real client sent right after OpenSession before invoking page actions. This is methodical model-porting, not parameter guessing.
 Implement proper response/ack sequencing: track the server's response sequence numbers and send a real `lastClientAckSequenceNumber` (don't hardcode -1), and/or apply the SaveValue `PropertyChanges` to a local form model so the action's control state is current. This is the machinery `ClientContext.ps1` (BcContainerHelper) implements — port that ack/state handling. Scripts: `scratchpad/run-bcpt.mjs` (works through SaveValue), `scratchpad/handshake.mjs`.
 
+## "Do it like Run-BCPTTests" — how MS does it, and how far we got
+
+MS's `Run-BCPTTestsInBcContainer` does NOT hand-build frames. `ClientContext.ps1` instantiates the compiled **`Microsoft.Dynamics.Framework.UI.Client.ClientSession`** (.NET) — the stateful client engine that maintains the logical-form model, applies `PropertyChanges`, tracks control activation, and awaits `Ready`. That's why hand-rolled TS frames (byte-identical on the wire) get `InteractionParameterException`: they lack the server-correlated session/form state the DLL keeps. To match it you must use the DLL (or reimplement its model).
+
+Reusing the DLL from the host (network-only, no container) — investigated live:
+- Downloaded the **exact-version** platform artifacts (`28.2.50931.51034`) via BcContainerHelper `Download-Artifacts` (network, no Docker). Client DLLs + Microsoft's `RunBCPTTests.ps1` are at
+  `C:\bcartifacts.cache\onprem\28.2.50931.51034\platform\Applications\TestFramework\TestRunner`.
+- DLLs are **.NET 8** → load in **pwsh 7** (Windows PowerShell 5.1 fails: `ReflectionTypeLoadException` on `Microsoft.Internal.AntiSSRF.dll`).
+- Cert is **trusted** (HEAD → 405, not a TLS error). `/bench-test-28-2/cs/` exists (405 on GET), `/csh` is the browser WS (200).
+- Ran MS's `RunBCPTTests.ps1 -Environment OnPrem -AuthorizationType NavUserPassword -Credential … -ServiceUrl https://…/bench-test-28-2/cs/?tenant=default&company=CRONUS%20AG -TestRunnerPage 149002 -SuiteCode MCPPROBE -SingleRun` → **"Could not open the client session … ClientSession is Uninitialized."**
+- Remaining hurdle: the .NET `ClientSession` auth/session-open handshake against THIS container's `/cs/` (SOCITAS multi-instance reverse proxy). Bounded — likely the client-service auth scheme / exact service URL for the proxy. NOT cert, NOT DLL-load, NOT version.
+
+Trade-off confirmed: using the DLL is the robust path but makes `al_run_bcpt` **Windows + pwsh7 + .NET + downloaded-DLLs** (shell out to `RunBCPTTests.ps1` / a ClientContext driver) — not the pure-TS cross-platform bridge. (Note: ~platform artifacts cached under `C:\bcartifacts.cache` — clearable.)
+
 ## CAVEATS (verified live)
 - **The suite must have ≥1 line** or Start errors **"There is nothing to run"** (`MCPPROBE` is empty). A real end-to-end validation needs a suite with a scenario codeunit line. Create one via the API (`bcptSuiteLines`) or the UI, pointing at a codeunit that exists in the target app.
 - **Concurrency:** the PRT ("Single Run mode") path returned *"BCPT Header record … not up-to-date"* — prefer the plain **StartNext** action, and re-open the form fresh before running.
