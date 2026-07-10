@@ -21,6 +21,7 @@ import {
   listCodeActions,
 } from "./codeActions.js";
 import { RunTestsInput, createRunTests } from "./runTests.js";
+import { RunBcptInput, createRunBcpt } from "./runBcpt.js";
 import { CompileInput, createCompile } from "./compile.js";
 import { PublishInput, createPublish } from "./publish.js";
 import {
@@ -42,6 +43,7 @@ export function registerTools(
   const getDiagnostics = createGetDiagnostics(client, config);
   const runCodeAction = createRunCodeAction(client, config);
   const runTests = createRunTests(config.workspaceRoot);
+  const runBcpt = createRunBcpt(config.workspaceRoot);
   const compile = createCompile(config);
   const publish = createPublish(config.workspaceRoot);
   const loadWorkspace = createLoadWorkspace(client, config);
@@ -238,6 +240,23 @@ export function registerTools(
     async (input) => {
       // No lspReady wait — this tool talks to BC directly, not the LSP.
       return json(await runTests(input));
+    },
+  );
+
+  mcp.registerTool(
+    "al_run_bcpt",
+    {
+      description:
+        "Run a Business Central Performance Toolkit (BCPT) suite headlessly against an " +
+        "on-premise dev service tier and return per-line duration/SQL percentiles. Reads " +
+        "connection info from .vscode/launch.json; credentials from BC_USER/BC_PASSWORD or " +
+        "~/.config/al-mcp-bridge/credentials.json. The suite must already exist (by code). " +
+        "Network-only — no BcContainerHelper, no container-host access, no custom AL.",
+      inputSchema: RunBcptInput.shape,
+    },
+    async (input) => {
+      // No lspReady wait — this tool talks to BC directly, not the LSP.
+      return json(await runBcpt(input));
     },
   );
 
