@@ -1,48 +1,67 @@
-# `/cs/` client-service protocol notes (Task 1 spike)
+# `/cs/` client-service protocol — COMPLETE (Task 1 spike, from live HAR)
 
-Captured live against `https://docker.socitas.de:56565/bench-test-28-2` (BC 28.2, company "CRONUS AG") via Playwright. Page **149002 = "BCPT CommandLine Runner"** confirmed openable via `?page=149002`.
+Captured live against `https://docker.socitas.de:56565/bench-test-28-2` (BC 28.2, Performance Toolkit 28.2.50931.51034, company "CRONUS AG"). This is the implementation spec for Task 6 (`src/bc/clientSession.ts`).
 
-## Transport & endpoints
+## Connection sequence
 
-- Auth to the **web client** is **forms auth** (`POST /{instance}/SignIn`), not Basic — a login page with username/password. (The `-dev` tier uses Basic for `al_run_tests`; the web/`-rest` tiers differ.)
-- CSRF: `POST /{instance}/csrf?...` → `{ "csrfToken": "CfDJ8…" }`. Token is passed back as `requestToken` in each Invoke.
-- Client-service verbs are `POST /{instance}/<verb>` (observed: `disposeSession`; others include the session-open/invoke verbs).
-- **The main interaction stream runs over a WebSocket inside a blob Web Worker** (`js/client.websocket-worker.chunk.js`). There is an HTTP-POST path too (the `disposeSession` beacon used POST). Client JS served at `/js/logicalclient.js`, `/js/client.js` (reverse-engineer interaction serialization there if needed).
+1. **Forms login** (the web tier uses forms auth, NOT Basic): `POST /{instance}/SignIn` with the username/password form fields → sets an auth **cookie**. All subsequent requests + the WS must carry that cookie.
+2. **CSRF:** `POST /{instance}/csrf` (with cookie) → `{ "csrfToken": "CfDJ8…" }`.
+3. **WebSocket:** connect `wss://{host}/{instance}/csh?ackseqnb=-1&csrftoken=<csrfToken>` (carry the auth cookie in the WS handshake headers).
 
-## JSON-RPC envelope (captured verbatim from the disposeSession beacon)
+## Frames — JSON-RPC 2.0 over the WS
 
+### OpenSession (first frame; opens the target page inline)
 ```json
-{"jsonrpc":"2.0","id":"|<guid>.beacon","method":"Invoke","params":[{
-  "openFormIds":["30"],
-  "sessionId":"CRONUS AGSR6391924679221193234NAV",
-  "sequenceNo":null,
-  "lastClientAckSequenceNumber":23,
-  "telemetryClientActivityId":null,
-  "navigationContext":{"applicationId":"NAV","deviceCategory":0,"spaInstanceId":"<id>"},
+{"jsonrpc":"2.0","id":"|undefined.<hex>","method":"OpenSession","params":[{
+  "openFormIds":[], "sessionId":"", "sequenceNo":null, "lastClientAckSequenceNumber":-1,
+  "navigationContext":{"applicationId":"NAV","deviceCategory":0,"spaInstanceId":"<spaId>"},
   "supportedExtensions":"[{\"Name\":\"Microsoft.Dynamics.Nav.Client.PageNotifier\"}, …]",
-  "interactionsToInvoke":[],
-  "tenantId":null,
-  "sessionKey":"sr6391924679221193234",
-  "company":"CRONUS AG",
-  "features":["QueueInteractions","MetadataCache","CacheSession", …],
-  "requestToken":"<csrfToken>",
+  "interactionsToInvoke":[{"interactionName":"OpenForm","namedParameters":"{\"query\":\"page=149002&runinframe=1\"}","callbackId":"0"}],
+  "sessionKey":"sr<digits>",           // client-generated
+  "company":null, "features":[ … ], "timeZoneInformation":{…},
   "disableResponseSequencing":true
 }]}
 ```
+- `spaInstanceId` — client-generated id (e.g. `mre75bt3`); reused in `sequenceNo`.
+- The **response** (gzipped, see below) returns the real `sessionId` = `"<company>SR<digits>NAV"` (e.g. `"CRONUS AGSR6391924723529362616NAV"`) and `["FormToShow",{"ServerId":"55", …}]` — the opened form's id.
 
-Field notes:
-- `method:"Invoke"`, single `params[0]` object. Matches the Frycos protocol writeup and `ClientContext.ps1`'s interaction model.
-- `interactionsToInvoke[]` is where **OpenForm / SaveValue / InvokeAction** interaction objects go (empty in the beacon).
-- `requestToken` = the `/csrf` token. `sessionId`/`sessionKey` are server-issued at session open. `sequenceNo`/`lastClientAckSequenceNumber` sequence the exchange.
+### Invoke (all later interactions)
+```json
+{"jsonrpc":"2.0","id":"|<hex>.<hex>","method":"Invoke","params":[{
+  "openFormIds":["55"], "sessionId":"CRONUS AGSR…NAV", "sequenceNo":"<spaId>#<n>",
+  "lastClientAckSequenceNumber":-1, "navigationContext":{…},
+  "interactionsToInvoke":[ <interaction> ],
+  "sessionKey":"sr<digits>", "company":"CRONUS AG",
+  "secondaryOpenFormIds":["53","54"]   // optional
+}]}
+```
+`sequenceNo` increments as `<spaId>#1`, `#2`, … per Invoke.
 
-## Still needed to finish Task 6 (`clientSession.ts`)
+### Interaction shapes (the `interactionsToInvoke[]` objects)
+- **OpenForm:** `{"interactionName":"OpenForm","namedParameters":"{\"query\":\"page=149002&runinframe=1\"}","callbackId":"0"}`
+- **SaveValue** (set a field — used to set the suite code on "Select Code"):
+  `{"interactionName":"SaveValue","namedParameters":"{\"value\":\"MCPPROBE\"}","controlPath":"server:c[1]/c[0]","formId":"55","callbackId":"n"}`
+  (confirm the exact control path for "Select Code" from the form response; its `ControlId` is `1460278902`, and the field lookup uses `SystemAction:110`.)
+- **InvokeAction** (click an action, e.g. "Start Next"):
+  `{"interactionName":"InvokeAction","namedParameters":"{\"systemAction\":0,\"key\":null,\"repeaterControlTarget\":null}","controlPath":"server:c[1]/c[0]","formId":"55","callbackId":"n"}`
+  (the "Start Next" action is `DesignName "StartNext"`, `DefinitionId 1408328076`; resolve its controlPath from the form response's action container.)
+- **InvokeSessionAction:** `{"interactionName":"InvokeSessionAction","namedParameters":"{\"systemAction\":810,\"data\":{}}","callbackId":"n"}` (systemActions 810/670 seen at startup; likely not needed for a headless run).
+- **KeepAlive:** `{"interactionName":"KeepAlive","namedParameters":"{}","skipExtendingSessionLifetime":true,"callbackId":"n"}` — send periodically for long runs.
 
-1. The **session-open** exchange (first Invoke: how `sessionId`/`sessionKey` are obtained) and the response shape.
-2. The exact **`interactionsToInvoke` object shapes** for `OpenFormInteraction(149002)`, `SaveValueInteraction(control, value)`, `InvokeActionInteraction(action)` — the interaction type names + control-path fields.
-3. How the response returns form/control state (to find the suite-code control + the Start action + poll status).
+## Responses — gzip + base64
+Every server response frame: `{"jsonrpc":"2.0","compressedResult":"H4sI…","id":"<matching id>"}`.
+Decode: `JSON.parse(zlib.gunzipSync(Buffer.from(compressedResult,"base64")).toString("utf8"))`.
+The decoded payload is BC form metadata: look for `["FormToShow",{ServerId,Caption,…}]`, control defs (`{"t":"sc","Caption":"Select Code","ControlId":1460278902,…}`), action defs (`{"t":"ac","Caption":"Start Next","DesignName":"StartNext",…}`), and `PropertyChanges` (control-state updates → poll status here). Errors arrive as a dialog control with `"Message"` + `"SystemAction":650` and an AL call stack.
 
-## How to get the last mile (pick one)
+## Headless-run recipe for page 149002 (BCPT CommandLine Runner)
+1. login → csrf → WS.
+2. `OpenSession` with inline `OpenForm(page=149002)`; from the response read `sessionId` + `formId` (e.g. "55") + the "Select Code" control path + the "Start Next" action control path.
+3. `Invoke` **SaveValue** to set "Select Code" = `<suiteCode>`.
+4. `Invoke` **InvokeAction** on "Start Next".
+5. Poll: the suite runs in background sessions; read completion from `BCPT Log Entry` via the **bcptLogEntries API** (§5.2 of the spec) filtered by suite + a start-time watermark — simpler and more robust than parsing form PropertyChanges. Bound by `timeoutSeconds`.
+6. Close WS / dispose session (`POST /{instance}/disposeSession` beacon or a CloseSession frame).
 
-- **Chrome DevTools (easiest & reliable):** DevTools *does* show worker WebSocket frames. Open the web client with DevTools → Network → WS, open page 149002, set suite `MCPPROBE`, click Start; the `cs` WS entry's Messages tab has the `OpenForm`/`SaveValue`/`InvokeAction` frames → save/paste.
-- **CDP auto-attach:** `Target.setAutoAttach({flatten:true})` + route `Network.webSocketFrame*` per attached worker session (fiddly through Playwright's CDP wrapper).
-- **Read the served client JS** (`/js/logicalclient.js`) for the interaction serializer (minified; grep for `OpenForm`, `Interaction`, `controlId`).
+## CAVEATS (verified live)
+- **The suite must have ≥1 line** or Start errors **"There is nothing to run"** (`MCPPROBE` is empty). A real end-to-end validation needs a suite with a scenario codeunit line. Create one via the API (`bcptSuiteLines`) or the UI, pointing at a codeunit that exists in the target app.
+- **Concurrency:** the PRT ("Single Run mode") path returned *"BCPT Header record … not up-to-date"* — prefer the plain **StartNext** action, and re-open the form fresh before running.
+- **Cookie lifetime / KeepAlive:** long runs need KeepAlive frames or the session may expire.
