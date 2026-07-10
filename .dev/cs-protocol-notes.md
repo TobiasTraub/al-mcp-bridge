@@ -98,6 +98,15 @@ Reusing the DLL from the host (network-only, no container) — investigated live
 
 Trade-off confirmed: using the DLL is the robust path but makes `al_run_bcpt` **Windows + pwsh7 + .NET + downloaded-DLLs** (shell out to `RunBCPTTests.ps1` / a ClientContext driver) — not the pure-TS cross-platform bridge. (Note: ~platform artifacts cached under `C:\bcartifacts.cache` — clearable.)
 
+## CONCLUSION — no clean network-only way to TRIGGER a true BCPT run
+
+Three distinct, verified dead-ends for headless START without container access:
+1. **TestRunnerHub (like `al_run_tests`)** → cannot produce `BCPT Log Entry`. BCPT logging is gated behind `BCPT Role Wrapper` (CU 149002, `Access=Internal`, System.Tooling), launched only by the Internal start machinery via `StartSession`; `BCPT Test Context` (Public) reads that SingleInstance context but cannot bootstrap it. Running a scenario via the hub executes it *without* BCPT measurement.
+2. **Pure-TS `/cs/` wire replay** → `InteractionParameterException` on the action; interactions must be grounded in the stateful client form-model (control activation / applied PropertyChanges) that only MS's `ClientSession` DLL maintains.
+3. **MS `ClientSession` DLL from the host (pwsh 7)** → DLLs load (.NET 8; WinPS 5.1 can't), `/cs/` reachable, cert trusted, and it is **not** an auth redirect (`/cs/` returns 500 on a bad body for no-auth/basic/forms-cookie alike). But `OpenSessionAsync` never leaves `Uninitialized` and surfaces **no** inner exception — the .NET-8 client fails opaquely when run headlessly outside its container runtime.
+
+Net: BCPT is architected to be triggered from within/near the container (`Run-BCPTTestsInBcContainer` runs the client automation in-container against localhost). A robust headless auto-start therefore needs **container access** (not available here) or a substantial, uncertain deep effort. **What DOES work network-only: create suites/lines (API) + read `bcptLogEntries` + aggregate.** Ship that; treat auto-start as gated on container access.
+
 ## CAVEATS (verified live)
 - **The suite must have ≥1 line** or Start errors **"There is nothing to run"** (`MCPPROBE` is empty). A real end-to-end validation needs a suite with a scenario codeunit line. Create one via the API (`bcptSuiteLines`) or the UI, pointing at a codeunit that exists in the target app.
 - **Concurrency:** the PRT ("Single Run mode") path returned *"BCPT Header record … not up-to-date"* — prefer the plain **StartNext** action, and re-open the form fresh before running.
