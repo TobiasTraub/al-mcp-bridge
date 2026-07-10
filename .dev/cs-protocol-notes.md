@@ -61,6 +61,19 @@ The decoded payload is BC form metadata: look for `["FormToShow",{ServerId,Capti
 5. Poll: the suite runs in background sessions; read completion from `BCPT Log Entry` via the **bcptLogEntries API** (§5.2 of the spec) filtered by suite + a start-time watermark — simpler and more robust than parsing form PropertyChanges. Bound by `timeoutSeconds`.
 6. Close WS / dispose session (`POST /{instance}/disposeSession` beacon or a CloseSession frame).
 
+## LIVE VALIDATION RESULTS (against bench-test-28-2)
+
+Proven working headlessly (Node + `ws`), end-to-end from a script:
+- ✅ Forms login (`GET /SignIn` → parse `__RequestVerificationToken` + antiforgery cookie → `POST /SignIn` with `UserName`/`Password`/`returnUrl`/`fromView`/token → `.AspNetCore.Cookies` auth cookie).
+- ✅ `POST /csrf` → token. ✅ WS `wss://…/{instance}/csh?ackseqnb=-1&csrftoken=…` with the auth cookie.
+- ✅ `OpenSession` with the FULL payload (trimmed payload → `NullReferenceException`; the complete `supportedExtensions`/`features`/`timeZoneInformation`/`profileDescription` works). Client **chooses** `sessionKey:"sr<19 digits>"`; server accepts it and `sessionId = company + sessionKey.toUpperCase() + "NAV"` (verified: the response echoes `CRONUS AGSR…NAV`). No need to parse sessionId.
+- ✅ Parse the OpenForm response: `findForm` → `ServerId` (formId, session-specific e.g. "5B"–"5F"); walk `Children` building `server:c[i]/c[j]` paths → **"Select Code"** field = `server:c[1]/c[0]` (ControlId 1460278902), **"StartNext"** action (`t:"ac"`) = `server:c[0]/c[1]/c[1]`.
+- ✅ `Invoke` **SaveValue** (`namedParameters:{"value":"MCPPROBE"}`, controlPath=suite field) — accepted, no error.
+- ⚠️ `Invoke` **InvokeAction** StartNext — the EXACT real-client interaction (`controlPath:"server:c[0]/c[1]/c[1]"`, `namedParameters:{"systemAction":0,"key":null,"data":{},"repeaterControlTarget":null}`, correlated from the HAR's "nothing to run" response) is **rejected with `InteractionParameterException`** from a fresh headless session, then `InvalidSessionException`. Same path + params + valid session as the browser, so the gap is **form-state / ack-sequencing**: the browser had prior interactions and tracked `lastClientAckSequenceNumber` (beacon showed 23); the script always sends `-1` with `disableResponseSequencing:true`. SaveValue's response is `PropertyChanges`-only (no full tree to re-parse).
+
+### Remaining work to make StartNext land
+Implement proper response/ack sequencing: track the server's response sequence numbers and send a real `lastClientAckSequenceNumber` (don't hardcode -1), and/or apply the SaveValue `PropertyChanges` to a local form model so the action's control state is current. This is the machinery `ClientContext.ps1` (BcContainerHelper) implements — port that ack/state handling. Scripts: `scratchpad/run-bcpt.mjs` (works through SaveValue), `scratchpad/handshake.mjs`.
+
 ## CAVEATS (verified live)
 - **The suite must have ≥1 line** or Start errors **"There is nothing to run"** (`MCPPROBE` is empty). A real end-to-end validation needs a suite with a scenario codeunit line. Create one via the API (`bcptSuiteLines`) or the UI, pointing at a codeunit that exists in the target app.
 - **Concurrency:** the PRT ("Single Run mode") path returned *"BCPT Header record … not up-to-date"* — prefer the plain **StartNext** action, and re-open the form fresh before running.
