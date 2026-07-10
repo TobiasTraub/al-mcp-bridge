@@ -247,11 +247,14 @@ export function registerTools(
     "al_run_bcpt",
     {
       description:
-        "Run a Business Central Performance Toolkit (BCPT) suite headlessly against an " +
-        "on-premise dev service tier and return per-line duration/SQL percentiles. Reads " +
-        "connection info from .vscode/launch.json; credentials from BC_USER/BC_PASSWORD or " +
-        "~/.config/al-mcp-bridge/credentials.json. The suite must already exist (by code). " +
-        "Network-only — no BcContainerHelper, no container-host access, no custom AL.",
+        "Read and aggregate the results of a Business Central Performance Toolkit (BCPT) suite: " +
+        "returns per-line duration/SQL percentiles from the suite's logged entries. The suite must " +
+        "have been RUN already (started from the BC web client's 'Start' action, or a scheduled/CI run) " +
+        "— BCPT has no supported network headless start, so this tool measures/reports rather than starts. " +
+        "Reads connection info from .vscode/launch.json (the API is served on the web/OData instance, " +
+        "auto-derived from a '-dev' launch instance or set via BC_BCPT_API_INSTANCE); credentials from " +
+        "BC_USER/BC_PASSWORD or ~/.config/al-mcp-bridge/credentials.json. Use sinceMinutes to scope to the " +
+        "latest run. Network-only — no BcContainerHelper, no container-host access, no custom AL.",
       inputSchema: RunBcptInput.shape,
     },
     async (input) => {

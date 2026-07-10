@@ -44,7 +44,7 @@ export async function getCompanyId(
 
 export async function getBcptLogEntries(
   baseUrl: URL, instance: string, tenant: string | undefined,
-  companyId: string, suiteCode: string, sinceIso: string,
+  companyId: string, suiteCode: string, sinceIso: string | undefined,
   creds: Credentials, allowInvalidCert: boolean,
   fetchFn: typeof fetch = fetch,
 ): Promise<RawLogEntry[]> {
@@ -53,7 +53,9 @@ export async function getBcptLogEntries(
   if (tenant) u.searchParams.set("tenant", tenant);
   const base = u.toString();
   const sep = base.includes("?") ? "&" : "?";
-  const filter = encodeURIComponent(`bcptCode eq '${suiteCode.replace(/'/g, "''")}' and startTime ge ${sinceIso}`);
+  const clauses = [`bcptCode eq '${suiteCode.replace(/'/g, "''")}'`];
+  if (sinceIso) clauses.push(`startTime ge ${sinceIso}`);
+  const filter = encodeURIComponent(clauses.join(" and "));
   const url = `${base}${sep}$filter=${filter}`;
   const data = await getJson(url, creds, allowInvalidCert, fetchFn);
   return (data?.value ?? []).map((r: any): RawLogEntry => ({

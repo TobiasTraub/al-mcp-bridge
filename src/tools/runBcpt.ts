@@ -2,7 +2,6 @@ import { z } from "zod";
 import { resolve } from "node:path";
 import { readLaunchConfig, normalizeServerUrl, loadCredentials, withHubLock, redact } from "../bc/connection.js";
 import { getCompanyId, getBcptLogEntries, RawLogEntry } from "../bc/bcApi.js";
-import { startBcptRun } from "../bc/clientSession.js";
 
 export type BcptLineResult = {
   lineNo: number; codeunitId: number; codeunitName: string; operations: number;
@@ -62,11 +61,11 @@ export function aggregate(
 // ---------------------------------------------------------------------------
 
 export const RunBcptInput = z.object({
-  suiteCode: z.string().min(1).describe("BCPT Suite code to run (must already exist in the target)."),
+  suiteCode: z.string().min(1).describe("BCPT Suite code whose logged results to read (the suite must have been run — e.g. started from the BC web client or a scheduled/CI run)."),
   projectPath: z.string().optional().describe("AL folder with .vscode/launch.json. Defaults to the bridge's primary workspace."),
   launchConfig: z.string().optional().describe("Named launch.json configuration. Defaults to the first."),
   company: z.string().optional().describe("Company name. Defaults to launch.json startupCompany."),
-  timeoutSeconds: z.number().int().positive().optional().describe("Max seconds to wait for the run. Default 900."),
+  sinceMinutes: z.number().int().positive().optional().describe("Only aggregate log entries from the last N minutes (the most recent run). Omit to aggregate ALL entries for the suite."),
   allowInvalidCert: z.boolean().optional().describe("Skip TLS validation. Default false."),
 });
 export type RunBcptInputT = z.infer<typeof RunBcptInput>;
@@ -81,7 +80,6 @@ export function createRunBcpt(primaryWorkspace: string) {
     const creds = loadCredentials(serverUrl.origin, cfg.serverInstance);
     const company = input.company ?? cfg.startupCompany ?? "";
     const allowInvalidCert = input.allowInvalidCert === true || process.env.BC_ALLOW_INVALID_CERT === "1" || cfg.validateServerCertificate === false;
-    const timeoutMs = (input.timeoutSeconds ?? 900) * 1000;
     // The BC API/OData is served under a different instance than launch.json's dev tier.
     // Verified live on bench-test-28-2: the dev instance is "<base>-dev" and the API lives
     // at "<base>-rest" (the dev instance returns 503 for /api). On a vanilla single-instance
@@ -90,11 +88,13 @@ export function createRunBcpt(primaryWorkspace: string) {
       || (cfg.serverInstance.endsWith("-dev") ? cfg.serverInstance.replace(/-dev$/, "-rest") : cfg.serverInstance);
     const lockKey = `${serverUrl.origin.toLowerCase()}|${cfg.serverInstance.toLowerCase()}|${cfg.tenant ?? ""}`;
 
+    // Read/aggregate mode: BCPT has no supported headless *start* over the network
+    // (see .dev/cs-protocol-notes.md), so the run is started externally (BC web client
+    // "Start", or a scheduled/CI run) and this reads + aggregates the logged results.
+    const sinceIso = input.sinceMinutes ? new Date(Date.now() - input.sinceMinutes * 60_000).toISOString() : undefined;
     return withHubLock(lockKey, async () => {
       const t0 = Date.now();
-      const sinceIso = new Date(t0).toISOString();
       try {
-        await startBcptRun({ serverUrl, instance: cfg.serverInstance, tenant: cfg.tenant, company, creds, allowInvalidCert, suiteCode: input.suiteCode, timeoutMs });
         const companyId = await getCompanyId(serverUrl, apiInstance, cfg.tenant, company, creds, allowInvalidCert);
         const entries = await getBcptLogEntries(serverUrl, apiInstance, cfg.tenant, companyId, input.suiteCode, sinceIso, creds, allowInvalidCert);
         return aggregate(input.suiteCode, entries, Date.now() - t0, warnings);

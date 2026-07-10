@@ -342,6 +342,7 @@ All tools are registered in `src/tools/register.ts`. Inputs are validated with Z
 | `al_compile` | `alc` (ships with the AL extension) | Compile an AL project to a `.app` package. Returns exit code, severity counts, the produced `.app` path, and a per-file overview (`files`: path + severity counts + distinct rule IDs). Fetch line-level detail per file with `al_get_diagnostics`, or pass `verbose=true` to inline the full per-diagnostic array. Uses the same analyzer, package cache, and ruleset config as the LSP. Linux-compatible. |
 | `al_publish` | BC `/<instance>/dev/apps` HTTP endpoint | Upload a compiled `.app` to a Business Central on-premise dev service tier. Reads server/instance/tenant from `.vscode/launch.json`. Requires `BC_USER`/`BC_PASSWORD` or a credentials file. |
 | `al_run_tests` | BC `/<instance>/dev/TestRunnerHub` SignalR | Run an AL test codeunit against a Business Central on-premise dev service tier. Reads connection info from `.vscode/launch.json`. Returns per-method pass/fail/skipped results. Serializes concurrent calls per hub to avoid BC's single-session restriction. |
+| `al_run_bcpt` | BC `api/microsoft/performancToolkit/v1.0` (OData) | Read and aggregate the results of a **Performance Toolkit (BCPT)** suite — per-line duration/SQL percentiles from its logged `bcptLogEntries`. The suite must have been **run already** (BC has no supported network headless *start*, so start it from the web client's *Start* action or a scheduled/CI run — see `.dev/cs-protocol-notes.md`). Reads `.vscode/launch.json`; the API is served on the web/OData instance (auto-derived from a `-dev` launch instance, or set `BC_BCPT_API_INSTANCE`). Scope to the latest run with `sinceMinutes`. Same credential flow as `al_run_tests`. |
 
 ---
 
@@ -370,7 +371,8 @@ al-mcp-bridge/
 │       ├── codeActions.ts    # al_list_code_actions, al_run_code_action
 │       ├── compile.ts        # al_compile (alc subprocess)
 │       ├── publish.ts        # al_publish (BC HTTP)
-│       └── runTests.ts       # al_run_tests (SignalR)
+│       ├── runTests.ts       # al_run_tests (SignalR)
+│       └── runBcpt.ts        # al_run_bcpt (BCPT results via OData) — shares src/bc/ with runTests
 ├── scripts/
 │   ├── install-al-ls.mjs     # Download/locate AL LS for the test suite
 │   ├── smoke.mjs             # Quick sanity check against a real AL project
