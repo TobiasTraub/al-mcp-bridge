@@ -49,7 +49,7 @@ test("describes the behavior", () => {
 - `src/tools/runBcpt.ts` — **new**; `createRunBcpt`, input schema, orchestration, aggregation.
 - `src/tools/runTests.ts` — **modify**; import the shared helpers from `src/bc/connection.ts` instead of owning them.
 - `src/tools/register.ts` — **modify**; register `al_run_bcpt`.
-- `tests/bcApi.test.ts`, `tests/runBcptAggregate.test.ts`, `tests/runBcptInput.test.ts` — **new**.
+- `tests/unit/bcApi.test.mjs`, `tests/unit/runBcptAggregate.test.mjs`, `tests/unit/runBcptInput.test.mjs` — **new**.
 - `.dev/cs-protocol-notes.md` — **new** (Task 1 output); captured `/cs/` wire format.
 - `spike/cs-probe.mts` — **new** (Task 1); throwaway probe, deleted or archived after.
 
@@ -290,7 +290,7 @@ git commit -m "feat: add Performance Toolkit API client (bcptLogEntries + compan
 
 **Files:**
 - Create: `src/tools/runBcpt.ts` (aggregation portion only in this task)
-- Test: `tests/runBcptAggregate.test.ts`
+- Test: `tests/unit/runBcptAggregate.test.mjs`
 
 **Interfaces:**
 - Consumes: `RawLogEntry` from `src/bc/bcApi.ts`.
@@ -301,43 +301,42 @@ git commit -m "feat: add Performance Toolkit API client (bcptLogEntries + compan
 
 - [ ] **Step 1: Write the failing test.**
 
-```ts
-import { describe, it, expect } from "vitest";
-import { aggregate } from "../src/tools/runBcpt.js";
+```js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { aggregate } from "../../dist/tools/runBcpt.js";
 
-const e = (lineNo: number, durationMs: number, sql: number) => ({
+const e = (lineNo, durationMs, sql) => ({
   bcptCode: "S", bcptLineNo: lineNo, codeunitId: 1, codeunitName: "CU",
   durationMs, noOfSqlStatements: sql, operation: "OnRun",
   status: "Success", startTime: "2026-07-10T10:00:00Z",
 });
 
-describe("aggregate", () => {
-  it("computes per-line count/min/max/avg and percentiles", () => {
-    const rows = [10, 20, 30, 40, 100].map((d, i) => e(10000, d, i));
-    const r = aggregate("S", rows, 5000, []);
-    expect(r.succeeded).toBe(true);
-    expect(r.lines).toHaveLength(1);
-    const l = r.lines[0];
-    expect(l.operations).toBe(5);
-    expect(l.durationMinMs).toBe(10);
-    expect(l.durationMaxMs).toBe(100);
-    expect(l.durationAvgMs).toBe(40);
-    expect(l.durationP50Ms).toBe(30);
-    expect(l.durationP90Ms).toBe(100);
-  });
+test("aggregate computes per-line count/min/max/avg and percentiles", () => {
+  const rows = [10, 20, 30, 40, 100].map((d, i) => e(10000, d, i));
+  const r = aggregate("S", rows, 5000, []);
+  assert.equal(r.succeeded, true);
+  assert.equal(r.lines.length, 1);
+  const l = r.lines[0];
+  assert.equal(l.operations, 5);
+  assert.equal(l.durationMinMs, 10);
+  assert.equal(l.durationMaxMs, 100);
+  assert.equal(l.durationAvgMs, 40);
+  assert.equal(l.durationP50Ms, 30);
+  assert.equal(l.durationP90Ms, 100);
+});
 
-  it("flags failure when a status is not Success and marks empty runs", () => {
-    expect(aggregate("S", [], 10, []).succeeded).toBe(false);
-    const bad = [{ ...e(1, 5, 0), status: "Failure" }];
-    expect(aggregate("S", bad, 10, []).succeeded).toBe(false);
-  });
+test("aggregate flags failure on non-Success status and empty runs", () => {
+  assert.equal(aggregate("S", [], 10, []).succeeded, false);
+  const bad = [{ ...e(1, 5, 0), status: "Failure" }];
+  assert.equal(aggregate("S", bad, 10, []).succeeded, false);
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.**
+- [ ] **Step 2: Build, then run to verify it fails.**
 
-Run: `npx vitest run tests/runBcptAggregate.test.ts`
-Expected: FAIL — `aggregate` not found.
+Run: `npm run build && node --test tests/unit/runBcptAggregate.test.mjs`
+Expected: build FAILs or test FAILs — `aggregate` not found / `dist/tools/runBcpt.js` missing.
 
 - [ ] **Step 3: Implement the aggregation in `src/tools/runBcpt.ts`.**
 
@@ -398,15 +397,15 @@ export function aggregate(
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes.**
+- [ ] **Step 4: Build, then run to verify it passes.**
 
-Run: `npx vitest run tests/runBcptAggregate.test.ts`
+Run: `npm run build && node --test tests/unit/runBcptAggregate.test.mjs`
 Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add src/tools/runBcpt.ts tests/runBcptAggregate.test.ts
+git add src/tools/runBcpt.ts tests/unit/runBcptAggregate.test.mjs
 git commit -m "feat: add BCPT per-line percentile aggregation"
 ```
 
@@ -417,7 +416,7 @@ git commit -m "feat: add BCPT per-line percentile aggregation"
 **Files:**
 - Modify: `src/tools/runBcpt.ts` (add schema + `createRunBcpt`)
 - Modify: `src/tools/register.ts`
-- Test: `tests/runBcptInput.test.ts`
+- Test: `tests/unit/runBcptInput.test.mjs`
 
 **Interfaces:**
 - Consumes: `readLaunchConfig`, `loadCredentials`, `normalizeServerUrl`, `withHubLock`, `redact` (`src/bc/connection.ts`); `getCompanyId`, `getBcptLogEntries` (`src/bc/bcApi.ts`); `aggregate`, `RunBcptResult` (this file); `startBcptRun` (Task 6, `src/bc/clientSession.ts`).
@@ -425,23 +424,21 @@ git commit -m "feat: add BCPT per-line percentile aggregation"
 
 - [ ] **Step 1: Write the failing schema test.**
 
-```ts
-import { describe, it, expect } from "vitest";
-import { RunBcptInput } from "../src/tools/runBcpt.js";
+```js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { RunBcptInput } from "../../dist/tools/runBcpt.js";
 
-describe("RunBcptInput", () => {
-  it("requires suiteCode and defaults optional fields", () => {
-    expect(RunBcptInput.safeParse({}).success).toBe(false);
-    const ok = RunBcptInput.safeParse({ suiteCode: "SALES" });
-    expect(ok.success).toBe(true);
-  });
+test("RunBcptInput requires suiteCode and accepts a minimal valid input", () => {
+  assert.equal(RunBcptInput.safeParse({}).success, false);
+  assert.equal(RunBcptInput.safeParse({ suiteCode: "SALES" }).success, true);
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.**
+- [ ] **Step 2: Build, then run to verify it fails.**
 
-Run: `npx vitest run tests/runBcptInput.test.ts`
-Expected: FAIL — `RunBcptInput` not found.
+Run: `npm run build && node --test tests/unit/runBcptInput.test.mjs`
+Expected: build FAILs (unresolved `startBcptRun` until the Step 5 stub is added) or test FAILs — `RunBcptInput` not found.
 
 - [ ] **Step 3: Add the schema and orchestration to `src/tools/runBcpt.ts`.** `startBcptRun` is imported from Task 6; until Task 6 lands it is a stub that throws — this task's deliverable is the schema + wiring, verified by the schema test and `tsc`.
 
@@ -516,13 +513,13 @@ mcp.registerTool(
 
 - [ ] **Step 5:** Run schema test + build.
 
-Run: `npx vitest run tests/runBcptInput.test.ts && npm run build`
+Run: `npm run build && node --test tests/unit/runBcptInput.test.mjs`
 Expected: schema test PASS; `tsc` may report only that `startBcptRun` is unresolved **until Task 6** — if Task 6 is not yet done, add a temporary stub `export async function startBcptRun(_: unknown): Promise<void> { throw new Error("startBcptRun not implemented (Task 6)"); }` in `src/bc/clientSession.ts` so the build is green.
 
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add src/tools/runBcpt.ts src/tools/register.ts tests/runBcptInput.test.ts src/bc/clientSession.ts
+git add src/tools/runBcpt.ts src/tools/register.ts tests/unit/runBcptInput.test.mjs src/bc/clientSession.ts
 git commit -m "feat: register al_run_bcpt with input schema and orchestration"
 ```
 
@@ -534,7 +531,7 @@ git commit -m "feat: register al_run_bcpt with input schema and orchestration"
 
 **Files:**
 - Modify: `src/bc/clientSession.ts` (replace the Task-5 stub)
-- Test: `tests/clientSession.test.ts` (frame construction against captured fixtures)
+- Test: `tests/unit/clientSession.test.mjs` (frame construction against captured fixtures)
 
 **Interfaces:**
 - Consumes: `Credentials` (`connection.ts`); the captured frames from `.dev/cs-protocol-notes.md`.
@@ -548,18 +545,18 @@ git commit -m "feat: register al_run_bcpt with input schema and orchestration"
 
 - [ ] **Step 4:** Run tests + build.
 
-Run: `npx vitest run tests/clientSession.test.ts && npm run build`
+Run: `npm run build && node --test tests/unit/clientSession.test.mjs`
 Expected: PASS; clean build.
 
 - [ ] **Step 5: Live smoke test** against the container (needs env creds + an existing suite).
 
-Run: `BC_USER=... BC_PASSWORD=... npx vitest run tests/integration/runBcpt.live.test.ts` (guarded by a `BC_LIVE=1` env gate so CI skips it)
+Run: `npm run build && BC_LIVE=1 BC_USER=... BC_PASSWORD=... node --test tests/e2e/runBcpt.live.test.mjs` (guarded by a `BC_LIVE=1` env gate so the normal suite skips it)
 Expected: `succeeded:true`, non-empty `lines` with plausible durations.
 
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add src/bc/clientSession.ts tests/clientSession.test.ts tests/fixtures/cs-openform-149002.json
+git add src/bc/clientSession.ts tests/unit/clientSession.test.mjs tests/fixtures/cs-openform-149002.json
 git commit -m "feat: implement /cs/ client-service BCPT start automation"
 ```
 
