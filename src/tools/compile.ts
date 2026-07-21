@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import type { BridgeConfig } from "../config.js";
+import { resolveWorkspaceSettings, type BridgeConfig } from "../config.js";
 
 // ---------------------------------------------------------------------------
 // MCP-facing input schema
@@ -168,7 +168,18 @@ export function createCompile(config: BridgeConfig) {
       throw new CompileError(`No app.json at ${projectPath}; not an AL project.`);
     }
 
-    const analyzers = input.analyzers ?? config.codeAnalyzers;
+    // Resolve analyzers + ruleset from the COMPILED project's own
+    // .vscode/settings.json — not the bridge's primary workspace — so a
+    // compile of any projectPath (including a git worktree that was never a
+    // registered LSP workspace) uses that project's al.codeAnalyzers and
+    // al.ruleSetPath, with AL_EXTRA_CODE_ANALYZERS (e.g. AiCop) folded in and
+    // ${analyzerFolder}/${CodeCop}/… expanded against the live AL extension.
+    // Reuse the startup-resolved settings when projectPath is a registered
+    // workspace; otherwise resolve on demand.
+    const projectSettings =
+      config.workspaceSettings.get(projectPath) ??
+      resolveWorkspaceSettings(projectPath, config.languageServerPath);
+    const analyzers = input.analyzers ?? projectSettings.codeAnalyzers;
     // Precedence for the symbol cache:
     //   1. explicit input.packageCachePath (caller override)
     //   2. bridge config (AL_PACKAGE_CACHE env or al.packageCachePaths)
@@ -176,7 +187,7 @@ export function createCompile(config: BridgeConfig) {
     //   4. undefined — alc emits AL1021 "The package cache path has not been specified"
     // The convention is the default the AL extension itself uses.
     const packageCachePaths = resolvePackageCachePaths(input.packageCachePath, config.packageCachePaths, projectPath);
-    const ruleSet = input.ruleSet ?? config.ruleSetPath;
+    const ruleSet = input.ruleSet ?? projectSettings.ruleSetPath;
     // /assemblyprobingpaths is for resolving .NET assemblies referenced from
     // AL code (via 'using' directives / DotNet type declarations). It does NOT
     // affect how alc resolves dependencies of Roslyn analyzer DLLs — those are
