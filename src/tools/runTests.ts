@@ -28,6 +28,7 @@
 
 import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
+import { loadTimeouts, withTimeout } from "../timeouts.js";
 import {
   HttpTransportType,
   HubConnection,
@@ -172,7 +173,8 @@ export function createRunTests(primaryWorkspace: string) {
     // singleton rejects parallel Initialize calls with a generic error.
     const lockKey = `${serverUrl.origin.toLowerCase()}|${launchCfg.serverInstance.toLowerCase()}|${launchCfg.tenant ?? ""}`;
 
-    return withHubLock(lockKey, async () => {
+    const timeouts = loadTimeouts();
+    return withHubLock(lockKey, timeouts.runTestsMs, async () => {
       const results: TestMethodResult[] = [];
       const t0 = Date.now();
       const connection = buildConnection(hubUrl, creds, allowInvalidCert);
@@ -214,7 +216,16 @@ export function createRunTests(primaryWorkspace: string) {
         await connection.invoke("Initialize", company, "", 0);
         // RunTests: (codeunitId, methodNames[])
         await connection.invoke("RunTests", input.codeunitId, methods);
-        await runCompleted;
+        // `TestRunCompleted` is the only thing that resolves `runCompleted`.
+        // A test that hangs server-side (a locked table, a modal the runner
+        // can't answer) never sends it, and the socket stays healthy - so this
+        // wait must be bounded or the tool call never returns. Partial results
+        // collected so far are reported in the error.
+        await withTimeout(
+          runCompleted,
+          timeouts.runTestsMs,
+          `test run of codeunit ${input.codeunitId} (${results.length} method result(s) received so far)`,
+        );
       } catch (err: unknown) {
         throw new BcConnectionError(redact(describeError(err)));
       } finally {

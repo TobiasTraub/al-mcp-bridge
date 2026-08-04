@@ -18,6 +18,7 @@
 import { constants, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { withTimeout } from "../timeouts.js";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -53,6 +54,7 @@ const hubLocks = new Map<string, Promise<void>>();
 
 export async function withHubLock<T>(
   key: string,
+  queueTimeoutMs: number,
   fn: () => Promise<T>,
 ): Promise<T> {
   const prev = hubLocks.get(key) ?? Promise.resolve();
@@ -63,7 +65,9 @@ export async function withHubLock<T>(
   });
   hubLocks.set(key, slot);
   try {
-    await prev; // wait for the previous run on this hub to finish
+    // Bounded: the predecessor holds this slot until ITS run settles, so an
+    // earlier hung run would otherwise wedge every queued run behind it too.
+    await withTimeout(prev, queueTimeoutMs, `waiting for the test slot on ${key}`);
     return await fn();
   } finally {
     settle();

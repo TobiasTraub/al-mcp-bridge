@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { resolve } from "node:path";
 import { readLaunchConfig, normalizeServerUrl, loadCredentials, withHubLock, redact } from "../bc/connection.js";
+import { loadTimeouts } from "../timeouts.js";
 import { getCompanyId, getBcptLogEntries, RawLogEntry } from "../bc/bcApi.js";
 
 export type BcptLineResult = {
@@ -92,7 +93,7 @@ export function createRunBcpt(primaryWorkspace: string) {
     // (see .dev/cs-protocol-notes.md), so the run is started externally (BC web client
     // "Start", or a scheduled/CI run) and this reads + aggregates the logged results.
     const sinceIso = input.sinceMinutes ? new Date(Date.now() - input.sinceMinutes * 60_000).toISOString() : undefined;
-    return withHubLock(lockKey, async () => {
+    return withHubLock(lockKey, loadTimeouts().toolMs, async () => {
       const t0 = Date.now();
       try {
         const companyId = await getCompanyId(serverUrl, apiInstance, cfg.tenant, company, creds, allowInvalidCert);
