@@ -32,6 +32,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { resolveWorkspaceSettings, type BridgeConfig } from "../config.js";
+import { CancelledError, acquireAlcSlot } from "./alcSlots.js";
 
 // ---------------------------------------------------------------------------
 // MCP-facing input schema
@@ -238,7 +239,10 @@ class CompileError extends Error {
 
 export function createCompile(config: BridgeConfig) {
   const alcPath = resolveAlcPath(config.languageServerPath);
-  return async (input: CompileInputT): Promise<CompileResult> => {
+  return async (
+    input: CompileInputT,
+    ctx: { signal?: AbortSignal; progress?: (message: string) => void } = {},
+  ): Promise<CompileResult> => {
     if (!existsSync(alcPath)) {
       throw new CompileError(
         `AL compiler not found at ${alcPath}. The bridge derives this from AL_LS_PATH; point AL_LS_PATH at the EditorServices host that ships alongside alc.`,
@@ -276,61 +280,22 @@ export function createCompile(config: BridgeConfig) {
     // handled by Roslyn's AssemblyLoadContext, which is why the bridge instead
     // prepends common helper DLLs (Analyzers.Common, ALCops.Common, …) as
     // explicit /analyzer: entries via augmentWithAnalyzerSiblings in config.ts.
-    const probingPaths = config.assemblyProbingPaths;
-
-    const tmpDir = mkdtempSync(join(tmpdir(), "al-compile-"));
-    const errorLogPath = join(tmpDir, "errors.json");
-
-    const args: string[] = [`/project:${projectPath}`, `/errorlog:${errorLogPath}`];
-    if (input.outputPath) {
-      args.push(`/out:${resolve(input.outputPath)}`);
-    }
-    for (const p of packageCachePaths) {
-      args.push(`/packagecachepath:${p}`);
-    }
-    for (const p of probingPaths) {
-      args.push(`/assemblyprobingpaths:${p}`);
-    }
-    if (analyzers && analyzers.length > 0) {
-      // alc accepts one /analyzer:<path> per DLL.
-      for (const a of analyzers) args.push(`/analyzer:${a}`);
-    }
-    if (ruleSet) {
-      args.push(`/ruleset:${ruleSet}`);
-    }
-    if (input.enableExternalRulesets) {
-      // Presence switch — alc treats the flag itself as opt-in.
-      args.push("/enableexternalrulesets");
-    }
-    if (input.generateCode === false) {
-      args.push("/generatecode-");
-    }
-    if (input.warningsAsErrors) {
-      args.push("/warnaserror+");
-    }
-    if (input.continueOnError) {
-      args.push("/continuebuildonerror+");
-    }
-
-    let stdout = "";
-    let stderr = "";
-    let exitCode = -1;
-    try {
-      const res = await runAlc(alcPath, args, config.timeouts.compileMs);
-      stdout = res.stdout;
-      stderr = res.stderr;
-      exitCode = res.exitCode;
-    } finally {
-      // We still need the errorlog after spawn finishes, so read before
-      // cleanup. If alc crashed we may not have one.
-    }
-
-    const diagnostics = existsSync(errorLogPath) ? parseErrorLog(readFileSync(errorLogPath, "utf8")) : [];
-    try {
-      rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup — tmpdir entries expire on reboot anyway
-    }
+    const { diagnostics, exitCode, stdout, stderr } = await runAlcCompile({
+      alcPath,
+      projectPath,
+      outputPath: input.outputPath ? resolve(input.outputPath) : undefined,
+      packageCachePaths,
+      assemblyProbingPaths: config.assemblyProbingPaths,
+      analyzers,
+      ruleSet,
+      enableExternalRulesets: input.enableExternalRulesets,
+      generateCode: input.generateCode,
+      warningsAsErrors: input.warningsAsErrors,
+      continueOnError: input.continueOnError,
+      timeoutMs: config.timeouts.compileMs,
+      signal: ctx.signal,
+      onWait: ctx.progress,
+    });
 
     const appPath = input.generateCode === false ? undefined : locateAppOutput(projectPath, input.outputPath);
 
@@ -346,6 +311,112 @@ export function createCompile(config: BridgeConfig) {
       maxDiagnostics: resolveMaxDiagnostics(input.maxDiagnostics),
     });
   };
+}
+
+// ---------------------------------------------------------------------------
+// One alc run (shared by al_compile and al_compile_delta)
+// ---------------------------------------------------------------------------
+
+export interface AlcCompileParams {
+  alcPath: string;
+  projectPath: string;
+  outputPath?: string;
+  packageCachePaths: string[];
+  assemblyProbingPaths: string[];
+  analyzers?: string[];
+  ruleSet?: string;
+  enableExternalRulesets: boolean;
+  generateCode: boolean;
+  warningsAsErrors?: boolean;
+  continueOnError?: boolean;
+  timeoutMs: number;
+  /** Keep only the last N chars of stdout/stderr. Unbounded when omitted.
+   *  Diagnostics come from the errorlog file, so the console text is only a
+   *  crash clue and a bounded tail is enough. */
+  maxOutputChars?: number;
+  /** Aborts the slot wait or kills a running alc (CancelledError). */
+  signal?: AbortSignal;
+  /** Progress text while waiting for a machine-wide alc slot. */
+  onWait?: (message: string) => void;
+}
+
+export interface AlcCompileRun {
+  diagnostics: CompileDiagnostic[];
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  /** False when alc wrote no errorlog at all (crash / bad args), as opposed
+   *  to "compiled with errors". */
+  errorLogWritten: boolean;
+}
+
+/**
+ * Build the alc argument list, run it, and parse its errorlog. Lines in the
+ * returned diagnostics are 0-based (see parseErrorLog).
+ */
+export async function runAlcCompile(p: AlcCompileParams): Promise<AlcCompileRun> {
+  const slot = await acquireAlcSlot({
+    // A lock older than any alc run is a leftover, never a live compile.
+    staleMs: p.timeoutMs > 0 ? p.timeoutMs + 60_000 : 0,
+    waitMs: resolveSlotWaitMs(p.timeoutMs),
+    signal: p.signal,
+    onWait: p.onWait,
+  });
+  const tmpDir = mkdtempSync(join(tmpdir(), "al-compile-"));
+  const errorLogPath = join(tmpDir, "errors.json");
+
+  const args: string[] = [`/project:${p.projectPath}`, `/errorlog:${errorLogPath}`];
+  if (p.outputPath) {
+    args.push(`/out:${p.outputPath}`);
+  }
+  for (const c of p.packageCachePaths) {
+    args.push(`/packagecachepath:${c}`);
+  }
+  for (const c of p.assemblyProbingPaths) {
+    args.push(`/assemblyprobingpaths:${c}`);
+  }
+  if (p.analyzers && p.analyzers.length > 0) {
+    // alc accepts one /analyzer:<path> per DLL.
+    for (const a of p.analyzers) args.push(`/analyzer:${a}`);
+  }
+  if (p.ruleSet) {
+    args.push(`/ruleset:${p.ruleSet}`);
+  }
+  if (p.enableExternalRulesets) {
+    // Presence switch — alc treats the flag itself as opt-in.
+    args.push("/enableexternalrulesets");
+  }
+  if (p.generateCode === false) {
+    args.push("/generatecode-");
+  }
+  if (p.warningsAsErrors) {
+    args.push("/warnaserror+");
+  }
+  if (p.continueOnError) {
+    args.push("/continuebuildonerror+");
+  }
+
+  try {
+    const res = await runAlc(p.alcPath, args, p.timeoutMs, p.maxOutputChars, p.signal);
+    // Read the errorlog before cleanup. If alc crashed there may be none.
+    const errorLogWritten = existsSync(errorLogPath);
+    const diagnostics = errorLogWritten ? parseErrorLog(readFileSync(errorLogPath, "utf8")) : [];
+    return { diagnostics, exitCode: res.exitCode, stdout: res.stdout, stderr: res.stderr, errorLogWritten };
+  } finally {
+    slot.release();
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup — tmpdir entries expire on reboot anyway
+    }
+  }
+}
+
+/** How long to wait for a free alc slot: AL_BRIDGE_SLOT_WAIT_MS, else one alc deadline. */
+export function resolveSlotWaitMs(compileMs: number, env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.AL_BRIDGE_SLOT_WAIT_MS?.trim());
+  if (Number.isFinite(n) && n >= 0 && env.AL_BRIDGE_SLOT_WAIT_MS?.trim()) return n;
+  return compileMs > 0 ? compileMs : 600_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +600,7 @@ function writeFullDiagnostics(
  * `<projectPath>/.alpackages` convention (which is what `AL: Download
  * symbols` populates and what the AL extension defaults to).
  */
-function resolvePackageCachePaths(
+export function resolvePackageCachePaths(
   override: string | undefined,
   configured: string[],
   projectPath: string,
@@ -544,7 +615,7 @@ function resolvePackageCachePaths(
 // alc location
 // ---------------------------------------------------------------------------
 
-function resolveAlcPath(languageServerPath: string): string {
+export function resolveAlcPath(languageServerPath: string): string {
   const dir = dirname(languageServerPath);
   // Linux: `alc`; Windows: `alc.exe`. The EditorServices host folder
   // always carries both the host and alc at the same level.
@@ -579,17 +650,39 @@ function runAlc(
   alcPath: string,
   args: string[],
   timeoutMs: number,
+  maxOutputChars?: number,
+  signal?: AbortSignal,
 ): Promise<AlcRunResult> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(alcPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    if (signal?.aborted) {
+      rejectPromise(new CancelledError("alc"));
+      return;
+    }
+    const child = spawn(alcPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
     let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      clear();
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Already gone.
+      }
+      rejectPromise(new CancelledError("alc"));
+    };
     const clear = () => {
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     };
-    child.stdout.on("data", (b) => (stdout += b.toString("utf8")));
-    child.stderr.on("data", (b) => (stderr += b.toString("utf8")));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // Trim at twice the cap so the slice runs rarely, not on every chunk.
+    const append = (acc: string, b: Buffer) => {
+      const next = acc + b.toString("utf8");
+      return maxOutputChars && next.length > 2 * maxOutputChars ? next.slice(-maxOutputChars) : next;
+    };
+    child.stdout.on("data", (b) => (stdout = append(stdout, b)));
+    child.stderr.on("data", (b) => (stderr = append(stderr, b)));
     child.on("error", (err) => {
       clear();
       rejectPromise(err);
@@ -642,7 +735,7 @@ interface SarifIssue {
   };
 }
 
-function parseErrorLog(raw: string): CompileDiagnostic[] {
+export function parseErrorLog(raw: string): CompileDiagnostic[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
