@@ -202,6 +202,9 @@ export function snapshotWorktree(projectPath: string, dest: string): WorktreeSna
     const src = join(projectPath, rel);
     // A tracked file deleted in the worktree is absent on the head side.
     if (!existsSync(src)) continue;
+    // A submodule (gitlink) is listed as one path but is a folder; checkout-index
+    // skips it on the base side too, so leave it out of both snapshots.
+    if (statSync(src).isDirectory()) continue;
     const out = join(dest, rel);
     mkdirSync(dirname(out), { recursive: true });
     copyFileSync(src, out);
