@@ -133,7 +133,7 @@ export interface CompileDeltaResult {
   new: InlineRow[];
   onTouchedLines: InlineRow[];
   errors?: InlineRow[];
-  analyzers: { loaded: string[]; aicop: "repo" | "env" | "override" | "missing"; skipped?: SkippedAnalyzer[] };
+  analyzers: { loaded: string[]; aicop: "repo" | "env" | "override" | "missing"; skipped?: SkippedAnalyzer[]; deprecated?: string[] };
   environment: { hints: string[] };
   truncated: { newTotal: number; newShown: number; onTouchedLinesTotal: number; onTouchedLinesShown: number };
   fullReportPath?: string;
@@ -273,10 +273,10 @@ export function createCompileDelta(config: BridgeConfig) {
     const ruleSet = input.ruleSet ?? settings.ruleSetPath;
     const packageCachePaths = resolvePackageCachePaths(input.packageCachePath, config.packageCachePaths, projectPath);
     const aicop = classifyAicop(analyzers, input.analyzers !== undefined);
-    // Configured analyzers that could not be loaded. Deprecated ones are skipped
-    // on purpose and reported; any other missing one blocks a 'clean' verdict.
+    // Configured analyzers that could not be loaded block a 'clean' verdict.
     const skipped = input.analyzers !== undefined ? [] : settings.skippedAnalyzers ?? [];
-    const missingRequired = skipped.filter((s) => s.reason !== "deprecated");
+    const missingRequired = skipped;
+    const deprecated = input.analyzers !== undefined ? [] : settings.deprecatedAnalyzers ?? [];
     if (aicop === "missing" && process.env.AL_BRIDGE_DELTA_REQUIRE_AICOP === "1") {
       throw new CompileDeltaError("AICOP_MISSING", "Socitas.AiCop.dll is not among the resolved analyzers (AL_BRIDGE_DELTA_REQUIRE_AICOP=1).");
     }
@@ -437,11 +437,10 @@ export function createCompileDelta(config: BridgeConfig) {
             ". Install them (or fix .vscode/settings.json → al.codeAnalyzers) and re-run.",
         );
       }
-      const deprecated = skipped.filter((s) => s.reason === "deprecated");
       if (deprecated.length > 0) {
         hints.push(
-          `Skipped deprecated analyzer(s) listed in al.codeAnalyzers: ${deprecated.map((s) => basename(s.resolved)).join(", ")}. ` +
-            "Replace them with BusinessCentral.SocitasCopV2.dll and Socitas.AiCop.dll in .vscode/settings.json.",
+          `Deprecated analyzer(s) configured and loaded: ${deprecated.map((p) => basename(p)).join(", ")}. ` +
+            "Consider replacing them with BusinessCentral.SocitasCopV2.dll and Socitas.AiCop.dll in .vscode/settings.json.",
         );
       }
 
@@ -504,6 +503,7 @@ export function createCompileDelta(config: BridgeConfig) {
           loaded: loadedAnalyzers(analyzers),
           aicop,
           ...(skipped.length > 0 ? { skipped } : {}),
+          ...(deprecated.length > 0 ? { deprecated: deprecated.map((p) => basename(p)) } : {}),
         },
         environment: { hints },
         truncated: {

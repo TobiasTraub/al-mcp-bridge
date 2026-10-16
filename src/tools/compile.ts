@@ -223,7 +223,7 @@ export interface CompileResult {
    *  the raw text is the only clue to what went wrong. */
   stdoutTail?: string;
   stderrTail?: string;
-  /** Configured analyzers that were NOT loaded (deprecated, not found, or an
+  /** Configured analyzers that were NOT loaded (not found, or an
    *  unresolvable placeholder). Present only when there are any. */
   skippedAnalyzers?: SkippedAnalyzer[];
   /** Human-readable note when `skippedAnalyzers` is present. */

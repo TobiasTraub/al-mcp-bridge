@@ -40,13 +40,18 @@ export interface AlWorkspaceSettings {
   /** Absolute path to the project ruleset JSON (mirrors `al.ruleSetPath`). */
   ruleSetPath?: string;
   /**
-   * `al.codeAnalyzers` / `AL_EXTRA_CODE_ANALYZERS` entries that were NOT loaded.
-   * `deprecated` entries (old SocitasCop v1, ReviewerCop) are skipped on purpose,
-   * even when the DLL exists; anything else is a configured analyzer that could
-   * not be found. Never dropped silently: compile results and al_lsp_status
-   * report these.
+   * `al.codeAnalyzers` / `AL_EXTRA_CODE_ANALYZERS` entries that could NOT be
+   * loaded (file not found, or a placeholder with no analyzer folder). Never
+   * dropped silently: compile results and al_lsp_status report these, and
+   * al_compile_delta cannot return 'clean' while one is missing.
    */
   skippedAnalyzers: SkippedAnalyzer[];
+  /**
+   * Loaded analyzers that are deprecated (old SocitasCop v1, ReviewerCop). A
+   * configured analyzer always runs; this only drives a non-blocking hint to
+   * move the repo to SocitasCopV2 + AiCop.
+   */
+  deprecatedAnalyzers: string[];
 }
 
 export interface SkippedAnalyzer {
@@ -54,14 +59,13 @@ export interface SkippedAnalyzer {
   entry: string;
   /** Expanded absolute path, or "" when a placeholder could not be resolved. */
   resolved: string;
-  reason: "not-found" | "unresolved-placeholder" | "deprecated";
+  reason: "not-found" | "unresolved-placeholder";
 }
 
 /**
- * Analyzers that were replaced and must not run any more: the old SocitasCop
- * (v1) is superseded by BusinessCentral.SocitasCopV2, ReviewerCop by
- * SocitasCopV2 + Socitas.AiCop. Running them next to their successors double-
- * reports rules under old IDs.
+ * Analyzers that have successors: the old SocitasCop (v1) -> BusinessCentral.
+ * SocitasCopV2, ReviewerCop -> SocitasCopV2 + Socitas.AiCop. Still loaded when
+ * a repo configures them; only reported so the repo can be moved over.
  */
 export const DEPRECATED_ANALYZERS = new Set([
   "businesscentral.socitascop.dll",
@@ -269,14 +273,15 @@ export function resolveWorkspaceSettings(
   const fromEnv = parseDelimitedList(process.env.AL_EXTRA_CODE_ANALYZERS);
   let codeAnalyzers: string[] = [];
   const skippedAnalyzers: SkippedAnalyzer[] = [];
+  const deprecatedAnalyzers: string[] = [];
   let effectiveEnableCodeAnalysis = enableCodeAnalysis;
   if (enableCodeAnalysis) {
-    codeAnalyzers = resolveCodeAnalyzers([...fromSettings, ...fromEnv], ctx, skippedAnalyzers);
+    codeAnalyzers = resolveCodeAnalyzers([...fromSettings, ...fromEnv], ctx, skippedAnalyzers, deprecatedAnalyzers);
   } else if (fromEnv.length > 0) {
     // Workspace disabled analysis, but team policy via env wins: load only
     // the env extras (NOT the workspace's `al.codeAnalyzers` — those were
     // explicitly disabled) and turn the master switch back on.
-    codeAnalyzers = resolveCodeAnalyzers(fromEnv, ctx, skippedAnalyzers);
+    codeAnalyzers = resolveCodeAnalyzers(fromEnv, ctx, skippedAnalyzers, deprecatedAnalyzers);
     if (codeAnalyzers.length > 0) {
       effectiveEnableCodeAnalysis = true;
       process.stderr.write(
@@ -307,6 +312,7 @@ export function resolveWorkspaceSettings(
     backgroundCodeAnalysis,
     ruleSetPath,
     skippedAnalyzers,
+    deprecatedAnalyzers,
   };
 }
 
@@ -512,7 +518,12 @@ function resolvePlaceholders(value: string, ctx: PlaceholderCtx): string {
     .replace(/\$\{UICop\}/g, uCop);
 }
 
-function resolveCodeAnalyzers(raw: string[], ctx: PlaceholderCtx, skipped: SkippedAnalyzer[] = []): string[] {
+function resolveCodeAnalyzers(
+  raw: string[],
+  ctx: PlaceholderCtx,
+  skipped: SkippedAnalyzer[] = [],
+  deprecated: string[] = [],
+): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const entry of raw) {
@@ -525,11 +536,6 @@ function resolveCodeAnalyzers(raw: string[], ctx: PlaceholderCtx, skipped: Skipp
       continue;
     }
     const abs = isAbsolute(expanded) ? expanded : resolve(ctx.workspaceFolder, expanded);
-    if (DEPRECATED_ANALYZERS.has(basename(abs).toLowerCase())) {
-      skipped.push({ entry, resolved: abs, reason: "deprecated" });
-      process.stderr.write(`[al-mcp-bridge] al.codeAnalyzers entry is deprecated, NOT loaded: ${abs}\n`);
-      continue;
-    }
     if (!existsSync(abs)) {
       skipped.push({ entry, resolved: abs, reason: "not-found" });
       process.stderr.write(
@@ -541,6 +547,7 @@ function resolveCodeAnalyzers(raw: string[], ctx: PlaceholderCtx, skipped: Skipp
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(abs);
+    if (DEPRECATED_ANALYZERS.has(basename(abs).toLowerCase())) deprecated.push(abs);
   }
   return out;
 }

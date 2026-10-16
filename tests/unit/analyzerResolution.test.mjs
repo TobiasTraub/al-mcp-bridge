@@ -6,8 +6,9 @@
  * `${CodeCop}`, `${AppSourceCop}`, `${analyzerFolder}…LinterCop.dll` etc. all
  * resolved to nothing and were dropped with only a stderr line. A compile gate
  * then ran with just the AL_EXTRA_CODE_ANALYZERS extras and still said "clean".
- * Configured analyzers that can't be loaded must now be reported, and the
- * deprecated SocitasCop v1 / ReviewerCop must be skipped visibly.
+ * Configured analyzers that can't be loaded must now be reported. A deprecated
+ * analyzer (SocitasCop v1, ReviewerCop) still runs when configured; it is only
+ * flagged in `deprecatedAnalyzers`.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -85,19 +86,32 @@ test("deriveAnalyzerFolder: AL 18 layout (no Analyzers folder) -> bin", () => {
   }
 });
 
-test("AL 18: Microsoft cops + LinterCop resolve from bin; SocitasCop v1 is skipped as deprecated", () => {
+test("AL 18: Microsoft cops, LinterCop and a configured SocitasCop v1 all load from bin", () => {
   const root = mkdtempSync(join(tmpdir(), "albridge-ws18-"));
   try {
     const { ls } = makeExtension(join(root, "ext"), "al18", ["BusinessCentral.LinterCop.dll", "BusinessCentral.SocitasCop.dll"]);
     const ws = makeWorkspace(root, GC_STYLE);
     const s = withEnv(undefined, () => resolveWorkspaceSettings(ws, ls));
     const loaded = s.codeAnalyzers.map((p) => basename(p));
-    for (const cop of [...MS_COPS, "BusinessCentral.LinterCop.dll"]) assert.ok(loaded.includes(cop), `${cop} loaded`);
-    assert.ok(!loaded.includes("BusinessCentral.SocitasCop.dll"), "v1 not loaded");
-    assert.deepEqual(
-      s.skippedAnalyzers.map((x) => [basename(x.resolved), x.reason]),
-      [["BusinessCentral.SocitasCop.dll", "deprecated"]],
-    );
+    for (const cop of [...MS_COPS, "BusinessCentral.LinterCop.dll", "BusinessCentral.SocitasCop.dll"]) {
+      assert.ok(loaded.includes(cop), `${cop} loaded`);
+    }
+    assert.deepEqual(s.skippedAnalyzers, []);
+    assert.deepEqual(s.deprecatedAnalyzers.map((p) => basename(p)), ["BusinessCentral.SocitasCop.dll"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a configured SocitasCop v1 that isn't installed is not-found, like any configured analyzer", () => {
+  const root = mkdtempSync(join(tmpdir(), "albridge-v1nf-"));
+  try {
+    const { ls } = makeExtension(join(root, "ext"), "al18");
+    const ws = makeWorkspace(root, ["${CodeCop}", "${analyzerFolder}BusinessCentral.SocitasCop.dll"]);
+    const s = withEnv(undefined, () => resolveWorkspaceSettings(ws, ls));
+    assert.deepEqual(s.skippedAnalyzers.map((x) => [x.entry, x.reason]), [
+      ["${analyzerFolder}BusinessCentral.SocitasCop.dll", "not-found"],
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -133,7 +147,7 @@ test("no analyzer folder at all -> placeholder entries are reported as unresolve
   }
 });
 
-test("deprecated ReviewerCop via AL_EXTRA_CODE_ANALYZERS is skipped and reported", () => {
+test("a configured ReviewerCop still loads and is flagged as deprecated", () => {
   const root = mkdtempSync(join(tmpdir(), "albridge-rc-"));
   try {
     const { ls, copDir } = makeExtension(join(root, "ext"), "al18", ["Socitas.ReviewerCop.dll", "Socitas.AiCop.dll"]);
@@ -142,8 +156,9 @@ test("deprecated ReviewerCop via AL_EXTRA_CODE_ANALYZERS is skipped and reported
     const s = withEnv(extra, () => resolveWorkspaceSettings(ws, ls));
     const loaded = s.codeAnalyzers.map((p) => basename(p));
     assert.ok(loaded.includes("Socitas.AiCop.dll"));
-    assert.ok(!loaded.includes("Socitas.ReviewerCop.dll"));
-    assert.deepEqual(s.skippedAnalyzers.map((x) => x.reason), ["deprecated"]);
+    assert.ok(loaded.includes("Socitas.ReviewerCop.dll"));
+    assert.deepEqual(s.skippedAnalyzers, []);
+    assert.deepEqual(s.deprecatedAnalyzers.map((p) => basename(p)), ["Socitas.ReviewerCop.dll"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

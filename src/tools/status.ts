@@ -106,11 +106,14 @@ export function createLspStatus(client: AlLspClient, config: BridgeConfig) {
 
       for (const sk of s?.skippedAnalyzers ?? []) {
         warnings.push({
-          code: sk.reason === "deprecated" ? "analyzer-deprecated" : "analyzer-not-loaded",
-          message:
-            sk.reason === "deprecated"
-              ? `Deprecated analyzer in al.codeAnalyzers was skipped: ${sk.resolved} (workspace ${folder}). Replace it with BusinessCentral.SocitasCopV2.dll / Socitas.AiCop.dll.`
-              : `Configured analyzer NOT loaded (${sk.reason}): ${sk.entry}${sk.resolved ? ` -> ${sk.resolved}` : ""} (workspace ${folder}). Its rules do not run.`,
+          code: "analyzer-not-loaded",
+          message: `Configured analyzer NOT loaded (${sk.reason}): ${sk.entry}${sk.resolved ? ` -> ${sk.resolved}` : ""} (workspace ${folder}). Its rules do not run.`,
+        });
+      }
+      for (const dep of s?.deprecatedAnalyzers ?? []) {
+        warnings.push({
+          code: "analyzer-deprecated",
+          message: `Deprecated analyzer configured and loaded: ${dep} (workspace ${folder}). Consider BusinessCentral.SocitasCopV2.dll / Socitas.AiCop.dll.`,
         });
       }
       const analyzers: AnalyzerStatus[] = (s?.codeAnalyzers ?? []).map((p) => {
