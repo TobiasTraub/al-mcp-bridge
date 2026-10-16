@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { resolveWorkspaceSettings, type BridgeConfig } from "../../config.js";
+import { resolveWorkspaceSettings, type BridgeConfig, type SkippedAnalyzer } from "../../config.js";
 import {
   resolveAlcPath,
   resolvePackageCachePaths,
@@ -133,7 +133,7 @@ export interface CompileDeltaResult {
   new: InlineRow[];
   onTouchedLines: InlineRow[];
   errors?: InlineRow[];
-  analyzers: { loaded: string[]; aicop: "repo" | "env" | "override" | "missing" };
+  analyzers: { loaded: string[]; aicop: "repo" | "env" | "override" | "missing"; skipped?: SkippedAnalyzer[] };
   environment: { hints: string[] };
   truncated: { newTotal: number; newShown: number; onTouchedLinesTotal: number; onTouchedLinesShown: number };
   fullReportPath?: string;
@@ -273,6 +273,10 @@ export function createCompileDelta(config: BridgeConfig) {
     const ruleSet = input.ruleSet ?? settings.ruleSetPath;
     const packageCachePaths = resolvePackageCachePaths(input.packageCachePath, config.packageCachePaths, projectPath);
     const aicop = classifyAicop(analyzers, input.analyzers !== undefined);
+    // Configured analyzers that could not be loaded. Deprecated ones are skipped
+    // on purpose and reported; any other missing one blocks a 'clean' verdict.
+    const skipped = input.analyzers !== undefined ? [] : settings.skippedAnalyzers ?? [];
+    const missingRequired = skipped.filter((s) => s.reason !== "deprecated");
     if (aicop === "missing" && process.env.AL_BRIDGE_DELTA_REQUIRE_AICOP === "1") {
       throw new CompileDeltaError("AICOP_MISSING", "Socitas.AiCop.dll is not among the resolved analyzers (AL_BRIDGE_DELTA_REQUIRE_AICOP=1).");
     }
@@ -402,7 +406,12 @@ export function createCompileDelta(config: BridgeConfig) {
         keyOf,
       });
       const environmental = m.preexisting.filter((r) => r.severity === "error");
-      const verdict = computeVerdict({ baseErrors, headErrors, newRows: m.newRows, aicopMissing: aicop === "missing" });
+      const verdict = computeVerdict({
+        baseErrors,
+        headErrors,
+        newRows: m.newRows,
+        aicopMissing: aicop === "missing" || missingRequired.length > 0,
+      });
 
       const touchedFiles = new Set<string>([...wholeAdded]);
       for (const f of diff.files.values()) if (f.newPath) touchedFiles.add(keyOf(f.newPath));
@@ -421,6 +430,20 @@ export function createCompileDelta(config: BridgeConfig) {
       // 27.5 side by side is normal and would be noise on every clean run.
       if (onlyErrors) hints.push(...environmentHints(projectPath, repo.topLevel, packageCachePaths));
       if (aicop === "missing") hints.push("Socitas.AiCop.dll is not among the analyzers — AI#### rules did not run, so the verdict cannot be 'clean'.");
+      if (missingRequired.length > 0) {
+        hints.push(
+          `${missingRequired.length} configured analyzer(s) could not be loaded, so their rules did not run and the verdict cannot be 'clean': ` +
+            missingRequired.map((s) => `${s.entry} (${s.reason}${s.resolved ? `: ${s.resolved}` : ""})`).join("; ") +
+            ". Install them (or fix .vscode/settings.json → al.codeAnalyzers) and re-run.",
+        );
+      }
+      const deprecated = skipped.filter((s) => s.reason === "deprecated");
+      if (deprecated.length > 0) {
+        hints.push(
+          `Skipped deprecated analyzer(s) listed in al.codeAnalyzers: ${deprecated.map((s) => basename(s.resolved)).join(", ")}. ` +
+            "Replace them with BusinessCentral.SocitasCopV2.dll and Socitas.AiCop.dll in .vscode/settings.json.",
+        );
+      }
 
       const maxInline = resolveMaxInline(input.maxInline);
       const headCounts = countRows(headAll, headSuppressed);
@@ -477,7 +500,11 @@ export function createCompileDelta(config: BridgeConfig) {
               ].slice(0, maxInline),
             }
           : {}),
-        analyzers: { loaded: loadedAnalyzers(analyzers), aicop },
+        analyzers: {
+          loaded: loadedAnalyzers(analyzers),
+          aicop,
+          ...(skipped.length > 0 ? { skipped } : {}),
+        },
         environment: { hints },
         truncated: {
           newTotal: m.newRows.length,
@@ -544,7 +571,7 @@ function summarize(
     verdict === "clean"
       ? "No new diagnostics."
       : verdict === "inconclusive"
-        ? "Inconclusive: analyzers did not run on both sides (or AiCop is missing) — see environment.hints."
+        ? "Inconclusive: analyzers did not run on both sides, or AiCop / a configured analyzer is missing — see environment.hints."
         : `${newRows.length} new (${mine} mine, ${newRows.length - mine} induced)${codes ? ` — ${codes}` : ""}.`;
   const tail = [
     onTouched > 0 ? `${onTouched} pre-existing on touched lines (onTouchedLines).` : "",

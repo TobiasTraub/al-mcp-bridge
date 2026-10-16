@@ -39,7 +39,35 @@ export interface AlWorkspaceSettings {
   backgroundCodeAnalysis: string | boolean;
   /** Absolute path to the project ruleset JSON (mirrors `al.ruleSetPath`). */
   ruleSetPath?: string;
+  /**
+   * `al.codeAnalyzers` / `AL_EXTRA_CODE_ANALYZERS` entries that were NOT loaded.
+   * `deprecated` entries (old SocitasCop v1, ReviewerCop) are skipped on purpose,
+   * even when the DLL exists; anything else is a configured analyzer that could
+   * not be found. Never dropped silently: compile results and al_lsp_status
+   * report these.
+   */
+  skippedAnalyzers: SkippedAnalyzer[];
 }
+
+export interface SkippedAnalyzer {
+  /** The entry as configured (placeholders unexpanded). */
+  entry: string;
+  /** Expanded absolute path, or "" when a placeholder could not be resolved. */
+  resolved: string;
+  reason: "not-found" | "unresolved-placeholder" | "deprecated";
+}
+
+/**
+ * Analyzers that were replaced and must not run any more: the old SocitasCop
+ * (v1) is superseded by BusinessCentral.SocitasCopV2, ReviewerCop by
+ * SocitasCopV2 + Socitas.AiCop. Running them next to their successors double-
+ * reports rules under old IDs.
+ */
+export const DEPRECATED_ANALYZERS = new Set([
+  "businesscentral.socitascop.dll",
+  "socitas.reviewercop.dll",
+  "socitas.reviewercop.common.dll",
+]);
 
 export interface BridgeConfig {
   /** Absolute path to the AL language server executable / DLL. */
@@ -240,14 +268,15 @@ export function resolveWorkspaceSettings(
   const fromSettings = readStringArray(settings, "al.codeAnalyzers") ?? [];
   const fromEnv = parseDelimitedList(process.env.AL_EXTRA_CODE_ANALYZERS);
   let codeAnalyzers: string[] = [];
+  const skippedAnalyzers: SkippedAnalyzer[] = [];
   let effectiveEnableCodeAnalysis = enableCodeAnalysis;
   if (enableCodeAnalysis) {
-    codeAnalyzers = resolveCodeAnalyzers([...fromSettings, ...fromEnv], ctx);
+    codeAnalyzers = resolveCodeAnalyzers([...fromSettings, ...fromEnv], ctx, skippedAnalyzers);
   } else if (fromEnv.length > 0) {
     // Workspace disabled analysis, but team policy via env wins: load only
     // the env extras (NOT the workspace's `al.codeAnalyzers` — those were
     // explicitly disabled) and turn the master switch back on.
-    codeAnalyzers = resolveCodeAnalyzers(fromEnv, ctx);
+    codeAnalyzers = resolveCodeAnalyzers(fromEnv, ctx, skippedAnalyzers);
     if (codeAnalyzers.length > 0) {
       effectiveEnableCodeAnalysis = true;
       process.stderr.write(
@@ -277,6 +306,7 @@ export function resolveWorkspaceSettings(
     enableCodeActions,
     backgroundCodeAnalysis,
     ruleSetPath,
+    skippedAnalyzers,
   };
 }
 
@@ -434,14 +464,21 @@ function stripJsonComments(input: string): string {
  *   .../bin/win32/Microsoft.Dynamics.Nav.EditorServices.Host.exe → .../bin/Analyzers/
  *   .../bin/Microsoft.Dynamics.Nav.EditorServices.Host.exe      → .../bin/Analyzers/
  */
-function deriveAnalyzerFolder(lsPath: string): string | undefined {
+/**
+ * The folder VS Code's `${analyzerFolder}` / `${CodeCop}` placeholders point at.
+ * Up to AL 17 the cops live in `bin/Analyzers`; from AL 18 on that folder is gone
+ * and they sit directly in `bin`. Exported for tests.
+ */
+export function deriveAnalyzerFolder(lsPath: string): string | undefined {
   let dir = dirname(lsPath);
   const leaf = basename(dir).toLowerCase();
   if (leaf === "win32" || leaf === "linux" || leaf === "darwin") {
     dir = dirname(dir);
   }
   const analyzers = join(dir, "Analyzers");
-  return existsSync(analyzers) ? analyzers : undefined;
+  if (existsSync(analyzers)) return analyzers;
+  if (existsSync(join(dir, "Microsoft.Dynamics.Nav.CodeCop.dll"))) return dir;
+  return undefined;
 }
 
 interface PlaceholderCtx {
@@ -475,16 +512,28 @@ function resolvePlaceholders(value: string, ctx: PlaceholderCtx): string {
     .replace(/\$\{UICop\}/g, uCop);
 }
 
-function resolveCodeAnalyzers(raw: string[], ctx: PlaceholderCtx): string[] {
+function resolveCodeAnalyzers(raw: string[], ctx: PlaceholderCtx, skipped: SkippedAnalyzer[] = []): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const entry of raw) {
     const expanded = resolvePlaceholders(entry, ctx);
-    if (!expanded) continue;
+    // A placeholder that needs the analyzer folder resolves to "" (or to a bare
+    // file name) when that folder can't be derived - report it, never drop it.
+    if (!expanded || (/\$\{(analyzerFolder|AppSourceCop|CodeCop|PerTenantExtensionCop|UICop)\}/.test(entry) && !ctx.analyzerFolder)) {
+      skipped.push({ entry, resolved: "", reason: "unresolved-placeholder" });
+      process.stderr.write(`[al-mcp-bridge] al.codeAnalyzers entry unresolvable (no analyzer folder), NOT loaded: ${entry}\n`);
+      continue;
+    }
     const abs = isAbsolute(expanded) ? expanded : resolve(ctx.workspaceFolder, expanded);
+    if (DEPRECATED_ANALYZERS.has(basename(abs).toLowerCase())) {
+      skipped.push({ entry, resolved: abs, reason: "deprecated" });
+      process.stderr.write(`[al-mcp-bridge] al.codeAnalyzers entry is deprecated, NOT loaded: ${abs}\n`);
+      continue;
+    }
     if (!existsSync(abs)) {
+      skipped.push({ entry, resolved: abs, reason: "not-found" });
       process.stderr.write(
-        `[al-mcp-bridge] al.codeAnalyzers entry not found, skipping: ${abs}\n`,
+        `[al-mcp-bridge] al.codeAnalyzers entry not found, NOT loaded: ${abs}\n`,
       );
       continue;
     }

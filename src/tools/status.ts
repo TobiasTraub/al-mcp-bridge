@@ -104,6 +104,15 @@ export function createLspStatus(client: AlLspClient, config: BridgeConfig) {
         });
       }
 
+      for (const sk of s?.skippedAnalyzers ?? []) {
+        warnings.push({
+          code: sk.reason === "deprecated" ? "analyzer-deprecated" : "analyzer-not-loaded",
+          message:
+            sk.reason === "deprecated"
+              ? `Deprecated analyzer in al.codeAnalyzers was skipped: ${sk.resolved} (workspace ${folder}). Replace it with BusinessCentral.SocitasCopV2.dll / Socitas.AiCop.dll.`
+              : `Configured analyzer NOT loaded (${sk.reason}): ${sk.entry}${sk.resolved ? ` -> ${sk.resolved}` : ""} (workspace ${folder}). Its rules do not run.`,
+        });
+      }
       const analyzers: AnalyzerStatus[] = (s?.codeAnalyzers ?? []).map((p) => {
         let exists = false;
         let mtime: string | null = null;

@@ -31,7 +31,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { resolveWorkspaceSettings, type BridgeConfig } from "../config.js";
+import { resolveWorkspaceSettings, type BridgeConfig, type SkippedAnalyzer } from "../config.js";
 import { CancelledError, acquireAlcSlot } from "./alcSlots.js";
 
 // ---------------------------------------------------------------------------
@@ -223,6 +223,11 @@ export interface CompileResult {
    *  the raw text is the only clue to what went wrong. */
   stdoutTail?: string;
   stderrTail?: string;
+  /** Configured analyzers that were NOT loaded (deprecated, not found, or an
+   *  unresolvable placeholder). Present only when there are any. */
+  skippedAnalyzers?: SkippedAnalyzer[];
+  /** Human-readable note when `skippedAnalyzers` is present. */
+  warning?: string;
   message: string;
 }
 
@@ -299,7 +304,7 @@ export function createCompile(config: BridgeConfig) {
 
     const appPath = input.generateCode === false ? undefined : locateAppOutput(projectPath, input.outputPath);
 
-    return buildCompileResult({
+    const result = buildCompileResult({
       diagnostics,
       exitCode,
       stdout,
@@ -310,6 +315,17 @@ export function createCompile(config: BridgeConfig) {
       verbose: input.verbose,
       maxDiagnostics: resolveMaxDiagnostics(input.maxDiagnostics),
     });
+    // Never drop a configured analyzer silently: say which ones did not run.
+    const skipped = input.analyzers !== undefined ? [] : projectSettings.skippedAnalyzers ?? [];
+    return skipped.length > 0
+      ? {
+          ...result,
+          skippedAnalyzers: skipped,
+          warning:
+            `${skipped.length} configured analyzer(s) were NOT loaded, so their rules did not run: ` +
+            skipped.map((s) => `${s.entry} (${s.reason})`).join("; "),
+        }
+      : result;
   };
 }
 
