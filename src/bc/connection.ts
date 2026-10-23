@@ -11,10 +11,14 @@
  *   - File fallback at `$XDG_CONFIG_HOME/al-mcp-bridge/credentials.json`
  *     (default `~/.config/...`); file must be mode 0600 — stricter is fine,
  *     any group/world-readable bit causes a hard refusal.
+ *   - An entry may carry `passwordCommand` (argv array) instead of
+ *     `password`; the password is then read from that command at call time,
+ *     so the file holds no secret.
  *   - Password is never logged, never returned in the MCP response, and
  *     scrubbed from error strings before they leave this module.
  */
 
+import { execFileSync } from "node:child_process";
 import { constants, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -264,14 +268,20 @@ export function loadCredentials(origin: string, serverInstance: string): Credent
 
   const record = parsed as Record<string, unknown>;
   let entry:
-    | { username?: unknown; password?: unknown }
+    | { username?: unknown; password?: unknown; passwordCommand?: unknown }
     | undefined;
   for (const k of candidateKeys) {
     const v = record[k];
     if (v && typeof v === "object") {
-      entry = v as { username?: unknown; password?: unknown };
+      entry = v as { username?: unknown; password?: unknown; passwordCommand?: unknown };
       break;
     }
+  }
+
+  // A `passwordCommand` keeps the secret out of the file: the password is read
+  // from a secret store (e.g. `pass` behind secret.sh) at call time.
+  if (entry && typeof entry.username === "string" && entry.passwordCommand !== undefined) {
+    return { username: entry.username, password: runPasswordCommand(entry.passwordCommand) };
   }
 
   if (!entry || typeof entry.username !== "string" || typeof entry.password !== "string") {
@@ -285,6 +295,51 @@ export function loadCredentials(origin: string, serverInstance: string): Credent
     );
   }
   return { username: entry.username, password: entry.password };
+}
+
+const PASSWORD_COMMAND_TIMEOUT_MS = 15_000;
+
+/**
+ * Runs a credential entry's `passwordCommand` (an argv array, no shell) and
+ * returns its stdout without the trailing newline. A leading `~/` in the
+ * executable is expanded to the home directory. stdout is never echoed into
+ * an error; only the first stderr line is, so a locked store can say how to
+ * unlock it.
+ */
+export function runPasswordCommand(command: unknown): string {
+  if (
+    !Array.isArray(command) ||
+    command.length === 0 ||
+    !command.every((part) => typeof part === "string" && part.length > 0)
+  ) {
+    throw new BcConnectionError(
+      `'passwordCommand' must be a non-empty array of strings, e.g. ["~/.claude/shared/bin/secret.sh", "get", "-n", "<Name>"].`,
+    );
+  }
+  const [exe, ...args] = command as string[];
+  const file = exe.startsWith("~/") ? join(homedir(), exe.slice(2)) : exe;
+
+  let stdout: string;
+  try {
+    stdout = execFileSync(file, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: PASSWORD_COMMAND_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const e = err as { stderr?: string | Buffer; status?: number | null; code?: string };
+    const stderrLine = String(e.stderr ?? "").split(/\r?\n/).find((l) => l.trim()) ?? "";
+    const reason = e.code === "ETIMEDOUT" ? "timed out" : e.code ?? `exited with ${e.status ?? "?"}`;
+    throw new BcConnectionError(
+      redact(`passwordCommand '${exe}' ${reason}${stderrLine ? `: ${stderrLine.trim()}` : ""}`),
+    );
+  }
+
+  const password = stdout.replace(/\r?\n$/, "");
+  if (!password) {
+    throw new BcConnectionError(`passwordCommand '${exe}' printed an empty password.`);
+  }
+  return password;
 }
 
 // ---------------------------------------------------------------------------

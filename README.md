@@ -511,6 +511,19 @@ File format:
 
 The key is `<origin>|<serverInstance>` (or `<origin>|*` as a wildcard). The bridge tries multiple key variants (with/without scheme, with/without port, `|` and `_` separators) so you don't need to guess the exact format.
 
+To keep the secret out of the file, give an entry a `passwordCommand` instead of `password`. It is an argv array (no shell, a leading `~/` is expanded), run on every call; its stdout minus the trailing newline is the password. The file can then stay in place permanently:
+
+```json
+{
+  "https://bc.example.com:7049|*": {
+    "username": "claude",
+    "passwordCommand": ["~/.claude/shared/bin/secret.sh", "get", "-n", "BcTestContainer"]
+  }
+}
+```
+
+If the command fails (e.g. a locked `pass` store), the error carries its first stderr line, never its stdout.
+
 Passwords are never logged, never returned in MCP responses, and scrubbed from error strings by the `redact()` function before they leave the tool module.
 
 ---
