@@ -121,6 +121,30 @@ export function resolveAppFile(pathOrProject: string): string {
   return apps[0];
 }
 
+/**
+ * The newest `.al` source under an AL project folder that is younger than its
+ * resolved `.app`, or undefined. A stale `.app` lacks new procedures and test
+ * methods, so their ids stay unnamed (`<codeunit>#<id>`) without any error.
+ */
+export function newerSourceThanApp(projectDir: string, appPath: string): string | undefined {
+  if (!statSync(projectDir).isDirectory()) return undefined;
+  const appTime = statSync(appPath).mtimeMs;
+  let newest: { path: string; time: number } | undefined;
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (extname(entry.name).toLowerCase() === ".al") {
+        const time = statSync(full).mtimeMs;
+        if (time > appTime && (!newest || time > newest.time)) newest = { path: full, time };
+      }
+    }
+  };
+  walk(projectDir);
+  return newest?.path;
+}
+
 export function loadAppSymbols(pathOrProject: string): AppSymbols {
   const appPath = resolveAppFile(pathOrProject);
   const raw = readZipEntry(readFileSync(appPath), "SymbolReference.json");

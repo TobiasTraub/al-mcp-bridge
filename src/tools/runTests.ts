@@ -56,6 +56,7 @@ import {
   buildCoverageReport,
   declaredObjects,
   loadAppSymbols,
+  newerSourceThanApp,
 } from "../bc/coverage.js";
 
 // ---------------------------------------------------------------------------
@@ -146,6 +147,14 @@ export interface TestMethodResult {
   durationMs: number;
 }
 
+/** The hub's per-codeunit summary row (empty methodName) - never counted as a test. */
+export interface CodeunitRunResult {
+  codeunitId: number;
+  status: TestResultStatus;
+  output: string;
+  durationMs: number;
+}
+
 export interface RunTestsResult {
   succeeded: boolean;
   codeunitId: number;
@@ -155,6 +164,7 @@ export interface RunTestsResult {
   total: number;
   durationMs: number;
   tests: TestMethodResult[];
+  codeunits: CodeunitRunResult[];
   codeunitIds: number[];
   coverage?: CoverageReport;
   warnings: string[];
@@ -210,7 +220,15 @@ export function createRunTests(primaryWorkspace: string) {
       : [];
     const appSymbols = coverageApps.map((p, i) => {
       try {
-        return loadAppSymbols(p);
+        const symbols = loadAppSymbols(p);
+        const newer = newerSourceThanApp(p, symbols.appPath);
+        if (newer) {
+          warnings.push(
+            `${symbols.appPath} is older than ${newer} — recompile (al_compile generateCode: true) ` +
+              `or new procedures and test methods stay unnamed.`,
+          );
+        }
+        return symbols;
       } catch (err) {
         // The test project's own .app is a convenience for test names only.
         if (i === 0) {
@@ -429,12 +447,23 @@ function coerceStatus(s: number | string): TestResultStatus {
   return "Unknown";
 }
 
-function summarize(
+export function summarize(
   codeunitId: number,
-  tests: TestMethodResult[],
+  rows: TestMethodResult[],
   warnings: string[],
   durationMs: number,
 ): RunTestsResult {
+  // The hub reports every codeunit once more as a row with an empty methodName,
+  // repeating the last method failure. Counting it as a test inflates total and failed.
+  const tests = rows.filter((r) => r.methodName !== "");
+  const codeunits: CodeunitRunResult[] = rows
+    .filter((r) => r.methodName === "")
+    .map(({ codeunitId: id, status, output, durationMs: ms }) => ({
+      codeunitId: id,
+      status,
+      output,
+      durationMs: ms,
+    }));
   let passed = 0;
   let failed = 0;
   let skipped = 0;
@@ -443,11 +472,24 @@ function summarize(
     else if (t.status === "Failed") failed++;
     else if (t.status === "Skipped") skipped++;
   }
-  const succeeded = failed === 0 && tests.length > 0;
+  // A failed codeunit row with no failed method of its own (OnRun, test runner, teardown)
+  // is a real failure that no method row shows.
+  const codeunitOnlyFailures = codeunits.filter(
+    (c) =>
+      c.status === "Failed" &&
+      !tests.some((t) => t.codeunitId === c.codeunitId && t.status === "Failed"),
+  );
+  for (const c of codeunitOnlyFailures) {
+    warnings.push(`Codeunit ${c.codeunitId} failed outside its test methods: ${c.output.trim()}`);
+  }
+  const succeeded = failed === 0 && codeunitOnlyFailures.length === 0 && tests.length > 0;
   const message =
     tests.length === 0
       ? `Test run completed but no test results were returned for codeunit ${codeunitId}.`
-      : `${passed} passed, ${failed} failed, ${skipped} skipped (${tests.length} total) in ${durationMs}ms.`;
+      : `${passed} passed, ${failed} failed, ${skipped} skipped (${tests.length} total) in ${durationMs}ms.` +
+        (codeunitOnlyFailures.length > 0
+          ? ` ${codeunitOnlyFailures.length} codeunit(s) failed outside their test methods.`
+          : "");
   return {
     succeeded,
     codeunitId,
@@ -457,6 +499,7 @@ function summarize(
     total: tests.length,
     durationMs,
     tests,
+    codeunits,
     codeunitIds: [codeunitId],
     warnings,
     message,

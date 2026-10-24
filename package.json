@@ -1,6 +1,6 @@
 {
   "name": "al-mcp-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server bridging AI agents to the AL language server for semantic AL code authoring and refactoring.",
   "type": "module",
   "bin": {

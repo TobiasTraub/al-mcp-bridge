@@ -115,3 +115,28 @@ test("RunTestsInput accepts the coverage and suite options", () => {
   });
   assert.equal(ok.success, true);
 });
+
+test("newerSourceThanApp flags .al sources younger than the .app", async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, utimesSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { newerSourceThanApp } = await import("../../dist/bc/coverage.js");
+  const dir = mkdtempSync(join(tmpdir(), "cov-stale-"));
+  mkdirSync(join(dir, "src"));
+  mkdirSync(join(dir, ".alpackages"));
+  const app = join(dir, "X.app");
+  const src = join(dir, "src", "A.Codeunit.al");
+  const pkg = join(dir, ".alpackages", "B.al");
+  writeFileSync(app, "");
+  writeFileSync(src, "");
+  writeFileSync(pkg, "");
+  const old = new Date(2020, 0, 1);
+  const mid = new Date(2021, 0, 1);
+  const recent = new Date(2022, 0, 1);
+  utimesSync(app, mid, mid);
+  utimesSync(src, old, old);
+  utimesSync(pkg, recent, recent);
+  assert.equal(newerSourceThanApp(dir, app), undefined, "dot folders are ignored");
+  utimesSync(src, recent, recent);
+  assert.equal(newerSourceThanApp(dir, app), src);
+  assert.equal(newerSourceThanApp(app, app), undefined, "an .app file path is not a project");
+});

@@ -209,6 +209,12 @@ Limits, by design:
   local procedure is invisible.
 - Compile the projects (`al_compile`, `generateCode: true`) before the run so the symbols match the
   published build. A touched object missing from the symbols is listed with a warning, never dropped.
+  A project folder whose `.al` sources are newer than its `.app` gets a warning too: test methods and
+  procedures added since the last compile come back unnamed (`<codeunit>#<memberId>`).
+
+The hub reports each codeunit once more as a row with an empty method name. Those rows are returned
+in `codeunits[]` and are not counted in `total`/`failed`; a codeunit that failed outside its methods
+(OnRun, teardown) fails the run with a warning.
 
 ## 6. Analyzer configuration (from `.vscode/settings.json`)
 
