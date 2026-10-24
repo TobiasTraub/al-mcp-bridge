@@ -15,6 +15,8 @@
  *               TestCompleted(codeunitId, method, status, output, durationMs)
  *               TestRunCompleted(coverage) — fires once per codeunit group
  *               RuntimeInitialized()
+ *   coverage  : coverageMode 2 (Procedure) fills TestRunCompleted's payload;
+ *               mapping to names lives in ../bc/coverage.ts.
  *
  * Credential security:
  *   - Read-only. This tool never writes credentials to disk.
@@ -47,6 +49,14 @@ import {
   redact,
   withHubLock,
 } from "../bc/connection.js";
+import {
+  CoverageReport,
+  DeclaredObject,
+  RawCoveragePayload,
+  buildCoverageReport,
+  declaredObjects,
+  loadAppSymbols,
+} from "../bc/coverage.js";
 
 // ---------------------------------------------------------------------------
 // MCP-facing input schema
@@ -57,6 +67,13 @@ export const RunTestsInput = z.object({
     .number()
     .int()
     .describe("The test codeunit ID to run (e.g. 95003)."),
+  additionalCodeunitIds: z
+    .array(z.number().int())
+    .optional()
+    .describe(
+      "Further test codeunits to run in the same session after codeunitId (all methods each). " +
+        "Use it to run a whole suite in one call; with coverage, the report merges every codeunit.",
+    ),
   testMethods: z
     .array(z.string())
     .optional()
@@ -87,6 +104,30 @@ export const RunTestsInput = z.object({
     .describe(
       "Skip TLS certificate validation. Default false. Prefer fixing the server cert over enabling this.",
     ),
+  coverage: z
+    .boolean()
+    .optional()
+    .describe(
+      "Collect procedure-level code coverage and return a `coverage` report. Names come only from " +
+        "public/internal procedures in the compiled apps' symbols; locals, triggers and event " +
+        "subscribers are counted (unmappedExecuted), never named. No line coverage.",
+    ),
+  coverageApps: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "AL project folders (newest top-level .app is used) or .app files whose symbols name the " +
+        "covered procedures - usually the app under test. projectPath's own .app is always added " +
+        "so test names resolve. Recompile before running so the ids match the published build.",
+    ),
+  coverageFiles: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "AL files the change touched (absolute paths). The report then lists exactly the objects " +
+        "they declare, including ones no test entered. Without it, every entered object of the " +
+        "coverageApps is listed.",
+    ),
 });
 
 export type RunTestsInputT = z.infer<typeof RunTestsInput>;
@@ -114,6 +155,8 @@ export interface RunTestsResult {
   total: number;
   durationMs: number;
   tests: TestMethodResult[];
+  codeunitIds: number[];
+  coverage?: CoverageReport;
   warnings: string[];
   message: string;
 }
@@ -158,6 +201,32 @@ export function createRunTests(primaryWorkspace: string) {
     // explicitly via `company`.
     const company = input.company ?? "";
     const methods = input.testMethods ?? [];
+    const codeunitIds = [input.codeunitId, ...(input.additionalCodeunitIds ?? [])];
+
+    // Resolve symbols and touched objects BEFORE the run, so a missing .app
+    // fails fast instead of after a long test session.
+    const coverageApps = input.coverage
+      ? [projectPath, ...(input.coverageApps ?? [])].map((p) => resolve(p))
+      : [];
+    const appSymbols = coverageApps.map((p, i) => {
+      try {
+        return loadAppSymbols(p);
+      } catch (err) {
+        // The test project's own .app is a convenience for test names only.
+        if (i === 0) {
+          warnings.push(`Test names unresolved: ${(err as Error).message}`);
+          return undefined;
+        }
+        throw new BcConnectionError((err as Error).message);
+      }
+    }).filter((a) => a !== undefined);
+    let touched: DeclaredObject[] | undefined;
+    if (input.coverage && input.coverageFiles) {
+      touched = input.coverageFiles.flatMap((f) => declaredObjects(resolve(f)));
+      if (touched.length === 0) {
+        warnings.push("coverageFiles declare no AL objects - reporting every entered object instead.");
+      }
+    }
 
     // Precedence for cert handling, strictest to loosest:
     //   1. explicit tool input `allowInvalidCert: true`
@@ -176,10 +245,18 @@ export function createRunTests(primaryWorkspace: string) {
     const timeouts = loadTimeouts();
     return withHubLock(lockKey, timeouts.runTestsMs, async () => {
       const results: TestMethodResult[] = [];
+      const coveragePayloads: RawCoveragePayload[] = [];
       const t0 = Date.now();
       const connection = buildConnection(hubUrl, creds, allowInvalidCert);
 
-      const runCompleted = new Promise<void>((resolvePromise, rejectPromise) => {
+      // `TestRunCompleted` fires once per RunTests call; each codeunit waits
+      // for its own signal. A closed hub settles whichever wait is pending.
+      let settleCurrent: ((err?: Error) => void) | undefined;
+      const nextRunCompleted = () =>
+        new Promise<void>((resolvePromise, rejectPromise) => {
+          settleCurrent = (err?: Error) => (err ? rejectPromise(err) : resolvePromise());
+        });
+      {
         connection.on("TestStarted", () => {
           // could surface progress later; keep quiet for now
         });
@@ -201,31 +278,36 @@ export function createRunTests(primaryWorkspace: string) {
             });
           },
         );
-        connection.on("TestRunCompleted", () => {
-          resolvePromise();
+        connection.on("TestRunCompleted", (coverage: RawCoveragePayload | null) => {
+          if (coverage) coveragePayloads.push(coverage);
+          settleCurrent?.();
         });
         connection.onclose((err) => {
-          if (err) rejectPromise(new BcConnectionError(redact(String(err))));
-          else resolvePromise();
+          settleCurrent?.(err ? new BcConnectionError(redact(String(err))) : undefined);
         });
-      });
+      }
 
       try {
         await connection.start();
-        // Initialize: (companyName, debuggingContext, coverageMode=0 None)
-        await connection.invoke("Initialize", company, "", 0);
-        // RunTests: (codeunitId, methodNames[])
-        await connection.invoke("RunTests", input.codeunitId, methods);
-        // `TestRunCompleted` is the only thing that resolves `runCompleted`.
-        // A test that hangs server-side (a locked table, a modal the runner
-        // can't answer) never sends it, and the socket stays healthy - so this
-        // wait must be bounded or the tool call never returns. Partial results
-        // collected so far are reported in the error.
-        await withTimeout(
-          runCompleted,
-          timeouts.runTestsMs,
-          `test run of codeunit ${input.codeunitId} (${results.length} method result(s) received so far)`,
-        );
+        // Initialize: (companyName, debuggingContext, coverageMode 0 None / 2 Procedure).
+        // Line mode (1) returns the same procedure-level payload, so it is never asked for.
+        await connection.invoke("Initialize", company, "", input.coverage ? 2 : 0);
+        const deadline = Date.now() + timeouts.runTestsMs;
+        for (const [i, codeunitId] of codeunitIds.entries()) {
+          const runCompleted = nextRunCompleted();
+          // RunTests: (codeunitId, methodNames[]) - the method filter applies to codeunitId only.
+          await connection.invoke("RunTests", codeunitId, i === 0 ? methods : []);
+          // `TestRunCompleted` is the only thing that resolves `runCompleted`.
+          // A test that hangs server-side (a locked table, a modal the runner
+          // can't answer) never sends it, and the socket stays healthy - so this
+          // wait must be bounded or the tool call never returns. Partial results
+          // collected so far are reported in the error.
+          await withTimeout(
+            runCompleted,
+            Math.max(1, deadline - Date.now()),
+            `test run of codeunit ${codeunitId} (${results.length} method result(s) received so far)`,
+          );
+        }
       } catch (err: unknown) {
         throw new BcConnectionError(redact(describeError(err)));
       } finally {
@@ -239,7 +321,15 @@ export function createRunTests(primaryWorkspace: string) {
       }
 
       const elapsed = Date.now() - t0;
-      return summarize(input.codeunitId, results, warnings, elapsed);
+      const summary = summarize(input.codeunitId, results, warnings, elapsed);
+      summary.codeunitIds = codeunitIds;
+      if (input.coverage) {
+        if (coveragePayloads.length === 0) {
+          warnings.push("Coverage was requested but the hub returned no coverage data.");
+        }
+        summary.coverage = buildCoverageReport(coveragePayloads, appSymbols, touched, []);
+      }
+      return summary;
     });
   };
 }
@@ -367,6 +457,7 @@ function summarize(
     total: tests.length,
     durationMs,
     tests,
+    codeunitIds: [codeunitId],
     warnings,
     message,
   };

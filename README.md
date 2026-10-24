@@ -187,6 +187,29 @@ Expected output: 18 tools listed, non-empty `al_list_objects`, an outline tree o
 
 ---
 
+### Code coverage (`al_run_tests`)
+
+`coverage: true` initializes the TestRunnerHub with coverage mode *Procedure* and returns a
+`coverage` report next to the test results:
+
+| Field | Meaning |
+|---|---|
+| `objects[]` | One entry per object declared in `coverageFiles` (or, without them, every entered object of the `coverageApps`): `entered`, `coveredProcedures[{name, coveredBy[]}]`, `uncoveredProcedures[]`, `unmappedExecuted` |
+| `otherObjectsEntered` | Objects outside the mapped apps the tests entered (base app, test libraries) |
+| `scope` | The limits below, repeated so an agent reading only the payload sees them |
+
+Limits, by design:
+
+- **Procedure level only.** The hub's *Line* mode returns the same procedure-level payload.
+- **Names only for public/internal procedures.** The hub sends member ids, a compiler hash over name,
+  return and parameter types that has changed between runtime versions. The bridge does not
+  reimplement it; it maps ids exactly through the `SymbolReference.json` of the compiled `.app`s in
+  `coverageApps` (plus `projectPath`'s own, for test names). Local procedures, triggers and event
+  subscribers are not in the symbols, so they are only counted (`unmappedExecuted`). An uncovered
+  local procedure is invisible.
+- Compile the projects (`al_compile`, `generateCode: true`) before the run so the symbols match the
+  published build. A touched object missing from the symbols is listed with a warning, never dropped.
+
 ## 6. Analyzer configuration (from `.vscode/settings.json`)
 
 The bridge reads `<workspace>/.vscode/settings.json` using the same logic VS Code uses. No extra config files or duplication needed.
@@ -356,7 +379,7 @@ All tools are registered in `src/tools/register.ts`. Inputs are validated with Z
 | `al_compile` | `alc` (ships with the AL extension) | Compile an AL project to a `.app` package. Returns exit code, severity counts, the produced `.app` path, and a per-file overview (`files`: path + severity counts + distinct rule IDs). Fetch line-level detail per file with `al_get_diagnostics`, or pass `verbose=true` to inline the full per-diagnostic array. **Size guard:** above `maxDiagnostics` (default 40, env `AL_BRIDGE_MAX_DIAGNOSTICS`) the result is summarized — `byRule` (top 15 rule IDs), `truncated` totals, the first N diagnostics errors-first, `files` capped to N — and `fullDiagnosticsPath` points at a JSON file (one diagnostic per line, errors first) holding the complete list. Uses the same analyzer, package cache, and ruleset config as the LSP. Linux-compatible. |
 | `al_compile_delta` | `alc` + `git` | Which diagnostics did THIS change introduce? Compiles the base (`baseRef`, or merge-base with `targetBranch` — one is required) and the head (working tree by default) as two full alc runs in sandbox snapshots under `%LOCALAPPDATA%\al-mcp-bridge\delta` (no `.alcache`, no edits to the working tree), matches them through the `git diff -U0` line map, and returns `verdict` (`clean` / `new-diagnostics` / `head-errors` / `inconclusive`), `new` rows tagged `mine` (added/replaced line) or `induced` (elsewhere, e.g. an LC0044 partner), `onTouchedLines`, counts and `fullReportPath`. **All lines are 1-based.** A side with errors runs no analyzers, so its warning counts are `null`, never 0; errors on both sides are `environmental`; a missing AiCop never yields `clean`. The base result is cached (key: base sha, ruleset content, analyzer DLLs, symbol package contents, alc), so fix-loop calls compile only the head. Sends `notifications/progress` when the client passes a progress token, and kills alc on cancel or timeout. |
 | `al_publish` | BC `/<instance>/dev/apps` HTTP endpoint | Upload a compiled `.app` to a Business Central on-premise dev service tier. Reads server/instance/tenant from `.vscode/launch.json`. Requires `BC_USER`/`BC_PASSWORD` or a credentials file. |
-| `al_run_tests` | BC `/<instance>/dev/TestRunnerHub` SignalR | Run an AL test codeunit against a Business Central on-premise dev service tier. Reads connection info from `.vscode/launch.json`. Returns per-method pass/fail/skipped results. Serializes concurrent calls per hub to avoid BC's single-session restriction. |
+| `al_run_tests` | BC `/<instance>/dev/TestRunnerHub` SignalR | Run an AL test codeunit against a Business Central on-premise dev service tier. Reads connection info from `.vscode/launch.json`. Returns per-method pass/fail/skipped results. Serializes concurrent calls per hub to avoid BC's single-session restriction. `additionalCodeunitIds` runs a whole suite in one session. `coverage: true` adds a procedure-level coverage report (see [Code coverage](#code-coverage-al_run_tests)). |
 | `al_run_bcpt` | BC `api/microsoft/performancToolkit/v1.0` (OData) | Read and aggregate the results of a **Performance Toolkit (BCPT)** suite — per-line duration/SQL percentiles from its logged `bcptLogEntries`. The suite must have been **run already** (BC has no supported network headless *start*, so start it from the web client's *Start* action or a scheduled/CI run — see `.dev/cs-protocol-notes.md`). Reads `.vscode/launch.json`; the API is served on the web/OData instance (auto-derived from a `-dev` launch instance, or set `BC_BCPT_API_INSTANCE`). Scope to the latest run with `sinceMinutes`. Same credential flow as `al_run_tests`. |
 
 ### Session control
@@ -406,7 +429,7 @@ al-mcp-bridge/
 │       ├── codeActions.ts    # al_list_code_actions, al_run_code_action
 │       ├── compile.ts        # al_compile (alc subprocess)
 │       ├── publish.ts        # al_publish (BC HTTP)
-│       ├── runTests.ts       # al_run_tests (SignalR)
+│       ├── runTests.ts       # al_run_tests (SignalR; coverage mapping in src/bc/coverage.ts)
 │       └── runBcpt.ts        # al_run_bcpt (BCPT results via OData) — shares src/bc/ with runTests
 ├── scripts/
 │   ├── install-al-ls.mjs     # Download/locate AL LS for the test suite

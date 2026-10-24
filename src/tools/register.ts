@@ -285,6 +285,9 @@ export function registerTools(
       "Reads connection info from the project's .vscode/launch.json. " +
       "Credentials come from BC_USER/BC_PASSWORD env vars, or ~/.config/al-mcp-bridge/credentials.json " +
       "(mode 0600 required). Returns per-method pass/fail/skipped results. " +
+      "additionalCodeunitIds runs a whole suite in one session. coverage: true adds procedure-level " +
+      "coverage of the coverageApps (public/internal procedures named, locals/triggers counted) for " +
+      "the objects declared in coverageFiles. " +
       "Linux-compatible - does not use the Windows Credential Manager path Microsoft's tool requires.",
     RunTestsInput.shape,
     // No `ready()` wait - this tool talks to BC directly, not the LSP.
