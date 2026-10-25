@@ -26,6 +26,8 @@ export interface BridgeTimeouts {
   publishMs: number;
   /** One `al_run_tests` invocation, including the wait for its hub slot. */
   runTestsMs: number;
+  /** One `al_run_perf` call; the toolkit itself caps a run at 10 minutes of expected work. */
+  perfRunMs: number;
 }
 
 const DEFAULTS: BridgeTimeouts = {
@@ -38,6 +40,7 @@ const DEFAULTS: BridgeTimeouts = {
   compileDeltaMs: 1_320_000,
   publishMs: 300_000,
   runTestsMs: 900_000,
+  perfRunMs: 720_000,
 };
 
 const ENV_KEYS: Record<keyof BridgeTimeouts, string> = {
@@ -49,6 +52,7 @@ const ENV_KEYS: Record<keyof BridgeTimeouts, string> = {
   compileDeltaMs: "AL_BRIDGE_COMPILE_DELTA_TIMEOUT_MS",
   publishMs: "AL_BRIDGE_PUBLISH_TIMEOUT_MS",
   runTestsMs: "AL_BRIDGE_RUN_TESTS_TIMEOUT_MS",
+  perfRunMs: "AL_BRIDGE_PERF_RUN_TIMEOUT_MS",
 };
 
 /**

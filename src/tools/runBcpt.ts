@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { resolve } from "node:path";
-import { readLaunchConfig, normalizeServerUrl, loadCredentials, withHubLock, redact } from "../bc/connection.js";
+import { readLaunchConfig, normalizeServerUrl, loadCredentials, withHubLock, redact, deriveApiInstance } from "../bc/connection.js";
 import { loadTimeouts } from "../timeouts.js";
 import { getCompanyId, getBcptLogEntries, RawLogEntry } from "../bc/bcApi.js";
 
@@ -81,12 +81,7 @@ export function createRunBcpt(primaryWorkspace: string) {
     const creds = loadCredentials(serverUrl.origin, cfg.serverInstance);
     const company = input.company ?? cfg.startupCompany ?? "";
     const allowInvalidCert = input.allowInvalidCert === true || process.env.BC_ALLOW_INVALID_CERT === "1" || cfg.validateServerCertificate === false;
-    // The BC API/OData is served under a different instance than launch.json's dev tier.
-    // Verified live on bench-test-28-2: the dev instance is "<base>-dev" and the API lives
-    // at "<base>-rest" (the dev instance returns 503 for /api). On a vanilla single-instance
-    // container both share the same instance. Derive accordingly; allow an explicit override.
-    const apiInstance = process.env.BC_BCPT_API_INSTANCE?.trim()
-      || (cfg.serverInstance.endsWith("-dev") ? cfg.serverInstance.replace(/-dev$/, "-rest") : cfg.serverInstance);
+    const apiInstance = deriveApiInstance(cfg.serverInstance);
     const lockKey = `${serverUrl.origin.toLowerCase()}|${cfg.serverInstance.toLowerCase()}|${cfg.tenant ?? ""}`;
 
     // Read/aggregate mode: BCPT has no supported headless *start* over the network

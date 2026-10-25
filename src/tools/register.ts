@@ -24,6 +24,7 @@ import {
 } from "./codeActions.js";
 import { RunTestsInput, createRunTests } from "./runTests.js";
 import { RunBcptInput, createRunBcpt } from "./runBcpt.js";
+import { RunPerfInput, createRunPerf } from "./runPerf.js";
 import { CompileInput, createCompile } from "./compile.js";
 import { CompileDeltaInput, createCompileDelta, type ToolContext } from "./compileDelta/index.js";
 
@@ -75,6 +76,7 @@ export function registerTools(
   const runCodeAction = createRunCodeAction(client, config);
   const runTests = createRunTests(config.workspaceRoot);
   const runBcpt = createRunBcpt(config.workspaceRoot);
+  const runPerf = createRunPerf(config.workspaceRoot);
   const compile = createCompile(config);
   const compileDelta = createCompileDelta(config);
   const publish = createPublish(config.workspaceRoot);
@@ -302,12 +304,33 @@ export function registerTools(
       "have been RUN already (started from the BC web client's 'Start' action, or a scheduled/CI run) " +
       "- BCPT has no supported network headless start, so this tool measures/reports rather than starts. " +
       "Reads connection info from .vscode/launch.json (the API is served on the web/OData instance, " +
-      "auto-derived from a '-dev' launch instance or set via BC_BCPT_API_INSTANCE); credentials from " +
+      "auto-derived from a '-dev' launch instance or set via BC_API_INSTANCE); credentials from " +
       "BC_USER/BC_PASSWORD or ~/.config/al-mcp-bridge/credentials.json. Use sinceMinutes to scope to the " +
       "latest run. Network-only - no BcContainerHelper, no container-host access, no custom AL.",
     RunBcptInput.shape,
     // No `ready()` wait - this tool talks to BC directly, not the LSP.
     async (input) => runBcpt(input),
+  );
+
+  tool(
+    "al_run_perf",
+    "Run a performance scenario of the SOCITAS Performance Toolkit (ADO Module/SOCITAS Performance Toolkit) " +
+      "headlessly and return its run document: per-iteration SQL statements, rows read and duration, " +
+      "median/p95/min/max, the scenario's budget verdict and the delta against its baseline. `gate` is " +
+      "'pass' only for status Passed (Regressed, BudgetExceeded, Failed, Refused and InvalidInput fail it). " +
+      "Actions: run (default), list (installed scenarios + budgets + whether execution is allowed), " +
+      "setBaseline (entryNo), compare (entryNo vs baseEntryNo, 0 = current baseline), optIn. " +
+      "The toolkit app and the scenario's app (usually a test app) must be published on the container. " +
+      "SOCITAS on-prem containers report IsProduction = true, so the first run per company needs " +
+      "ensureOptIn: true (or action optIn), which PATCHes allowOnPremRuns on the toolkit setup. " +
+      "Use this - not al_run_tests - for performance criteria: the test runner isolates and caches, so it " +
+      "cannot measure. Calls the OData web service PerfToolkitSOC on the API instance derived from " +
+      "launch.json ('-dev' -> '-rest', override BC_API_INSTANCE); credentials from BC_USER/BC_PASSWORD or " +
+      "~/.config/al-mcp-bridge/credentials.json.",
+    RunPerfInput.shape,
+    // No `ready()` wait - this tool talks to BC directly, not the LSP.
+    async (input, ctx) => runPerf(input, ctx.signal),
+    t.perfRunMs,
   );
 
   tool(

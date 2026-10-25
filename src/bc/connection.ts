@@ -178,6 +178,19 @@ export function normalizeServerUrl(server: string, port?: number): URL {
   return u;
 }
 
+/**
+ * The BC API/OData instance for a launch.json dev instance. SOCITAS containers
+ * serve the dev endpoint on "<base>-dev" and API/OData on "<base>-rest" (the
+ * dev instance returns 503 for /api); a vanilla single-instance container uses
+ * the same instance for both. BC_API_INSTANCE (or the older
+ * BC_BCPT_API_INSTANCE) overrides the derivation.
+ */
+export function deriveApiInstance(serverInstance: string, env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.BC_API_INSTANCE?.trim() || env.BC_BCPT_API_INSTANCE?.trim();
+  if (override) return override;
+  return serverInstance.endsWith("-dev") ? serverInstance.replace(/-dev$/, "-rest") : serverInstance;
+}
+
 // ---------------------------------------------------------------------------
 // Credentials
 // ---------------------------------------------------------------------------
