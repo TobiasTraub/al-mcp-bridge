@@ -55,6 +55,7 @@ export { CompileDeltaError } from "./gitSnapshot.js";
 export const DEFAULT_MAX_INLINE = 25;
 export const DEFAULT_WINDOW = 3;
 const AICOP_DLL = "socitas.aicop.dll";
+const PERSONALCOP_DLL = "personalcop.dll";
 
 export const CompileDeltaInput = z.object({
   projectPath: z.string().describe("AL project folder (contains app.json). Required — the tool never guesses."),
@@ -133,7 +134,7 @@ export interface CompileDeltaResult {
   new: InlineRow[];
   onTouchedLines: InlineRow[];
   errors?: InlineRow[];
-  analyzers: { loaded: string[]; aicop: "repo" | "env" | "override" | "missing"; skipped?: SkippedAnalyzer[]; deprecated?: string[] };
+  analyzers: { loaded: string[]; aicop: "repo" | "env" | "override" | "missing"; personalcop: "repo" | "env" | "override" | "missing"; skipped?: SkippedAnalyzer[]; deprecated?: string[] };
   environment: { hints: string[] };
   truncated: { newTotal: number; newShown: number; onTouchedLinesTotal: number; onTouchedLinesShown: number };
   fullReportPath?: string;
@@ -273,6 +274,7 @@ export function createCompileDelta(config: BridgeConfig) {
     const ruleSet = input.ruleSet ?? settings.ruleSetPath;
     const packageCachePaths = resolvePackageCachePaths(input.packageCachePath, config.packageCachePaths, projectPath);
     const aicop = classifyAicop(analyzers, input.analyzers !== undefined);
+    const personalcop = classifyPersonalCop(analyzers, input.analyzers !== undefined);
     // Configured analyzers that could not be loaded block a 'clean' verdict.
     const skipped = input.analyzers !== undefined ? [] : settings.skippedAnalyzers ?? [];
     const missingRequired = skipped;
@@ -410,7 +412,7 @@ export function createCompileDelta(config: BridgeConfig) {
         baseErrors,
         headErrors,
         newRows: m.newRows,
-        aicopMissing: aicop === "missing" || missingRequired.length > 0,
+        aicopMissing: aicop === "missing" || personalcop === "missing" || missingRequired.length > 0,
       });
 
       const touchedFiles = new Set<string>([...wholeAdded]);
@@ -430,6 +432,7 @@ export function createCompileDelta(config: BridgeConfig) {
       // 27.5 side by side is normal and would be noise on every clean run.
       if (onlyErrors) hints.push(...environmentHints(projectPath, repo.topLevel, packageCachePaths));
       if (aicop === "missing") hints.push("Socitas.AiCop.dll is not among the analyzers — AI#### rules did not run, so the verdict cannot be 'clean'.");
+      if (personalcop === "missing") hints.push("PersonalCop.dll is not among the analyzers — PC#### rules did not run, so the verdict cannot be 'clean'.");
       if (missingRequired.length > 0) {
         hints.push(
           `${missingRequired.length} configured analyzer(s) could not be loaded, so their rules did not run and the verdict cannot be 'clean': ` +
@@ -502,6 +505,7 @@ export function createCompileDelta(config: BridgeConfig) {
         analyzers: {
           loaded: loadedAnalyzers(analyzers),
           aicop,
+          personalcop,
           ...(skipped.length > 0 ? { skipped } : {}),
           ...(deprecated.length > 0 ? { deprecated: deprecated.map((p) => basename(p)) } : {}),
         },
@@ -538,11 +542,23 @@ function deltaWindow(): number {
 }
 
 export function classifyAicop(analyzers: string[] | undefined, override: boolean): "repo" | "env" | "override" | "missing" {
-  const hit = (analyzers ?? []).find((a) => basename(a).toLowerCase() === AICOP_DLL);
+  return classifyRequiredAnalyzer(analyzers, override, AICOP_DLL);
+}
+
+export function classifyPersonalCop(analyzers: string[] | undefined, override: boolean): "repo" | "env" | "override" | "missing" {
+  return classifyRequiredAnalyzer(analyzers, override, PERSONALCOP_DLL);
+}
+
+function classifyRequiredAnalyzer(
+  analyzers: string[] | undefined,
+  override: boolean,
+  dll: string,
+): "repo" | "env" | "override" | "missing" {
+  const hit = (analyzers ?? []).find((a) => basename(a).toLowerCase() === dll);
   if (!hit || !existsSync(hit)) return "missing";
   if (override) return "override";
   const extra = (process.env.AL_EXTRA_CODE_ANALYZERS ?? "").toLowerCase();
-  return extra.includes(AICOP_DLL) ? "env" : "repo";
+  return extra.includes(dll) ? "env" : "repo";
 }
 
 function loadedAnalyzers(analyzers: string[] | undefined): string[] {
@@ -571,7 +587,7 @@ function summarize(
     verdict === "clean"
       ? "No new diagnostics."
       : verdict === "inconclusive"
-        ? "Inconclusive: analyzers did not run on both sides, or AiCop / a configured analyzer is missing — see environment.hints."
+        ? "Inconclusive: analyzers did not run on both sides, or AiCop / PersonalCop / a configured analyzer is missing — see environment.hints."
         : `${newRows.length} new (${mine} mine, ${newRows.length - mine} induced)${codes ? ` — ${codes}` : ""}.`;
   const tail = [
     onTouched > 0 ? `${onTouched} pre-existing on touched lines (onTouchedLines).` : "",

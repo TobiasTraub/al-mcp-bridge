@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { addedLines, approxLine, mapLine, parseDiff } from "../../dist/tools/compileDelta/diffMap.js";
 import { computeVerdict, digitsOnlyChange, matchDiagnostics } from "../../dist/tools/compileDelta/match.js";
-import { classifyAicop, keyOf, normalizeDiagnostic, normalizeMessage, orderNew } from "../../dist/tools/compileDelta/index.js";
+import { classifyAicop, classifyPersonalCop, keyOf, normalizeDiagnostic, normalizeMessage, orderNew } from "../../dist/tools/compileDelta/index.js";
 import {
   diffU0,
   repoInfo,
@@ -289,6 +289,21 @@ test("verdict: AiCop missing can never be clean", () => {
 test("classifyAicop: missing when absent or the file does not exist", () => {
   assert.equal(classifyAicop([], false), "missing");
   assert.equal(classifyAicop(["C:/nope/Socitas.AiCop.dll"], false), "missing");
+});
+
+test("classifyPersonalCop: missing when absent or the file does not exist, found by file name otherwise", () => {
+  assert.equal(classifyPersonalCop([], false), "missing");
+  assert.equal(classifyPersonalCop(["/nope/PersonalCop.dll"], false), "missing");
+  assert.equal(classifyPersonalCop([process.execPath], false), "missing");
+  const dir = mkdtempSync(join(tmpdir(), "personalcop-"));
+  try {
+    const dll = join(dir, "PersonalCop.dll");
+    writeFileSync(dll, "");
+    assert.equal(classifyPersonalCop([dll], true), "override");
+    assert.equal(classifyPersonalCop([dll], false), "repo");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("orderNew: errors first, then mine before induced", () => {
