@@ -275,6 +275,8 @@ export function createCompileDelta(config: BridgeConfig) {
     const packageCachePaths = resolvePackageCachePaths(input.packageCachePath, config.packageCachePaths, projectPath);
     const aicop = classifyAicop(analyzers, input.analyzers !== undefined);
     const personalcop = classifyPersonalCop(analyzers, input.analyzers !== undefined);
+    // PersonalCop is a personal analyzer: it only blocks a clean verdict where the operator opts in.
+    const personalcopMissing = personalcop === "missing" && process.env.AL_BRIDGE_DELTA_REQUIRE_PERSONALCOP === "1";
     // Configured analyzers that could not be loaded block a 'clean' verdict.
     const skipped = input.analyzers !== undefined ? [] : settings.skippedAnalyzers ?? [];
     const missingRequired = skipped;
@@ -412,7 +414,7 @@ export function createCompileDelta(config: BridgeConfig) {
         baseErrors,
         headErrors,
         newRows: m.newRows,
-        aicopMissing: aicop === "missing" || personalcop === "missing" || missingRequired.length > 0,
+        aicopMissing: aicop === "missing" || personalcopMissing || missingRequired.length > 0,
       });
 
       const touchedFiles = new Set<string>([...wholeAdded]);
@@ -432,7 +434,7 @@ export function createCompileDelta(config: BridgeConfig) {
       // 27.5 side by side is normal and would be noise on every clean run.
       if (onlyErrors) hints.push(...environmentHints(projectPath, repo.topLevel, packageCachePaths));
       if (aicop === "missing") hints.push("Socitas.AiCop.dll is not among the analyzers — AI#### rules did not run, so the verdict cannot be 'clean'.");
-      if (personalcop === "missing") hints.push("PersonalCop.dll is not among the analyzers — PC#### rules did not run, so the verdict cannot be 'clean'.");
+      if (personalcopMissing) hints.push("PersonalCop.dll is not among the analyzers — PC#### rules did not run, so the verdict cannot be 'clean' (AL_BRIDGE_DELTA_REQUIRE_PERSONALCOP=1).");
       if (missingRequired.length > 0) {
         hints.push(
           `${missingRequired.length} configured analyzer(s) could not be loaded, so their rules did not run and the verdict cannot be 'clean': ` +
@@ -587,7 +589,7 @@ function summarize(
     verdict === "clean"
       ? "No new diagnostics."
       : verdict === "inconclusive"
-        ? "Inconclusive: analyzers did not run on both sides, or AiCop / PersonalCop / a configured analyzer is missing — see environment.hints."
+        ? "Inconclusive: analyzers did not run on both sides, or a required analyzer (AiCop, PersonalCop when required) is missing — see environment.hints."
         : `${newRows.length} new (${mine} mine, ${newRows.length - mine} induced)${codes ? ` — ${codes}` : ""}.`;
   const tail = [
     onTouched > 0 ? `${onTouched} pre-existing on touched lines (onTouchedLines).` : "",

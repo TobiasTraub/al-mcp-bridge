@@ -175,6 +175,7 @@ Expected output: 18 tools listed, non-empty `al_list_objects`, an outline tree o
 | `AL_BRIDGE_DELTA_MAX_INLINE` | No | `25` | `al_compile_delta`: inline rows per list (`new`, `onTouchedLines`); everything is in `fullReportPath`. |
 | `AL_BRIDGE_DELTA_WINDOW` | No | `3` | `al_compile_delta`: ±lines within which a diagnostic inside a changed hunk still counts as the same (pre-existing) one. |
 | `AL_BRIDGE_DELTA_REQUIRE_AICOP` | No | — | `1` makes `al_compile_delta` fail with `AICOP_MISSING` instead of returning a non-clean verdict when Socitas.AiCop is not loaded. |
+| `AL_BRIDGE_DELTA_REQUIRE_PERSONALCOP` | No | — | `1` makes a missing `PersonalCop.dll` (personal analyzer, `PC####`) block a `clean` verdict from `al_compile_delta` (verdict `inconclusive`). Unset, PersonalCop is reported in `analyzers.personalcop` but never required. |
 | `AL_BRIDGE_MAX_DIAGNOSTICS` | No | `40` | `al_compile` size guard: above this many diagnostics the result is summarized (`byRule`, `truncated`, first N errors-first, `files` capped) and the complete list is written to `fullDiagnosticsPath` under `<os tmp>/al-mcp-bridge/compile-diagnostics/`. The `maxDiagnostics` tool parameter overrides it per call. |
 | `AL_BRIDGE_PUBLISH_TIMEOUT_MS` | No | `300000` | Deadline for the `.app` upload to the dev service tier. |
 | `AL_BRIDGE_RUN_TESTS_TIMEOUT_MS` | No | `900000` | Deadline for one test run, including the wait for its per-hub slot. |

@@ -363,7 +363,7 @@ export function registerTools(
       "e.g. an LC0044 partner), `onTouchedLines` (pre-existing diagnostics on lines the change touched), counts, and " +
       "`fullReportPath` (every row with its classification, one per line). A side with compile errors runs no " +
       "analyzers, so its warning counts are null, never 0, and the verdict is inconclusive or head-errors. Errors " +
-      "present on both sides are `environmental` (usually the symbol cache). A missing AiCop or PersonalCop never yields clean.",
+      "present on both sides are `environmental` (usually the symbol cache). A missing AiCop never yields clean (nor a missing PersonalCop when AL_BRIDGE_DELTA_REQUIRE_PERSONALCOP=1).",
     CompileDeltaInput.shape,
     async (input, ctx) => compileDelta(input, ctx),
     t.compileDeltaMs,

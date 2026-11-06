@@ -296,12 +296,18 @@ test("classifyPersonalCop: missing when absent or the file does not exist, found
   assert.equal(classifyPersonalCop(["/nope/PersonalCop.dll"], false), "missing");
   assert.equal(classifyPersonalCop([process.execPath], false), "missing");
   const dir = mkdtempSync(join(tmpdir(), "personalcop-"));
+  const savedExtra = process.env.AL_EXTRA_CODE_ANALYZERS;
   try {
     const dll = join(dir, "PersonalCop.dll");
     writeFileSync(dll, "");
+    delete process.env.AL_EXTRA_CODE_ANALYZERS;
     assert.equal(classifyPersonalCop([dll], true), "override");
     assert.equal(classifyPersonalCop([dll], false), "repo");
+    process.env.AL_EXTRA_CODE_ANALYZERS = dll;
+    assert.equal(classifyPersonalCop([dll], false), "env");
   } finally {
+    if (savedExtra === undefined) delete process.env.AL_EXTRA_CODE_ANALYZERS;
+    else process.env.AL_EXTRA_CODE_ANALYZERS = savedExtra;
     rmSync(dir, { recursive: true, force: true });
   }
 });
