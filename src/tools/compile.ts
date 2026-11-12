@@ -399,8 +399,8 @@ export async function runAlcCompile(p: AlcCompileParams): Promise<AlcCompileRun>
     args.push(`/ruleset:${p.ruleSet}`);
   }
   if (p.enableExternalRulesets) {
-    // Presence switch — alc treats the flag itself as opt-in.
-    args.push("/enableexternalrulesets");
+    // alc ignores the bare flag; only the explicit :true form lifts BlockedExternalRulesets (AL1033).
+    args.push("/enableexternalrulesets:true");
   }
   if (p.generateCode === false) {
     args.push("/generatecode-");

@@ -9,15 +9,24 @@ on:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        # Git Bash on Windows, so the steps below run unchanged on both OSes.
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 22+: `node --test` only expands the tests/**/*.test.mjs globs from Node 21 on.
+          node-version: "22"
           cache: npm
 
       - name: Read pinned AL LS version
@@ -50,6 +59,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Run unit tests
+        run: npm run test:unit
+
       - name: Run e2e tests
         run: npm run test:e2e
 
@@ -61,5 +73,5 @@ jobs:
         with:
           name: al-ls-log
           path: |
-            tests/.al-ls/**/bin/linux/EditorServices.log
+            tests/.al-ls/**/EditorServices.log
           if-no-files-found: ignore
