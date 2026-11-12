@@ -1,0 +1,22 @@
+name: backup-to-private
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  workflow_dispatch: {}
+concurrency: backup-to-private
+jobs:
+  mirror:
+    if: github.repository == 'TobiasTraub/al-mcp-bridge'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          KEY: ${{ secrets.BACKUP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then echo "::warning::BACKUP_DEPLOY_KEY not set - backup skipped"; exit 0; fi
+          mkdir -p ~/.ssh && printf '%s\n' "$KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          git clone --bare "https://github.com/${{ github.repository }}.git" r && cd r
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/id -o StrictHostKeyChecking=accept-new"
+          dst=git@github.com:TobiasTraub/al-mcp-bridge-private.git
+          git push "$dst" --all
+          git push "$dst" --tags
