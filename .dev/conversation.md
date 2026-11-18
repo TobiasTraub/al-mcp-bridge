@@ -36,3 +36,9 @@ Two independent pools — bridge O_EXCL+pid lock files in `$LOCALAPPDATA|tmpdir/
 - Upgrade: already-running bridges/wrappers keep old pools until restart → out of scope.
 ### Spec drafted → .dev/spec.md (13 ACs)
 - Spec go (judge ASK 0.75) → user: **Go** (2026-11-18). Spec frozen.
+### Verify (sonnet, read-only) → mechanical fixes applied
+- M1/AC1-5/AC10 scoped to Linux (Windows keeps its own cap, N1/AC12) — removed the M1↔N1 contradiction.
+- AC7 rewritten from WHILE to WHEN form.
+- M2: "released by the kernel" → outcome "free as soon as the holder is gone, no age-based reclaim" (kernel lock stays the issue's stated preference, mechanism open).
+- N3/AC11: unsafe-dir/kernel-lock specifics → outcome "cannot enforce the shared cap".
+- Handoff: acceptance.json (13 ACs, failing), ac_hash 0f0e2586ccf5bf9e, phase spec-approved.
