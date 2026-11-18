@@ -333,6 +333,7 @@ export function createCompileDelta(config: BridgeConfig) {
         } finally {
           clearInterval(heartbeat);
         }
+        if (run.slotWarning && !hints.includes(run.slotWarning)) hints.push(run.slotWarning);
         if (!run.errorLogWritten) {
           throw new CompileDeltaError(
             side === "base" ? "BASE_COMPILE_FAILED" : "HEAD_COMPILE_FAILED",

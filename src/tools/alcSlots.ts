@@ -1,5 +1,9 @@
 /**
- * Cross-process cap on concurrent alc runs.
+ * Cross-process cap on concurrent heavy AL jobs.
+ *
+ * On Linux al_compile / al_compile_delta draw from the same flock pool as the
+ * al-runner wrapper's test runs (see sharedSlots.ts); the legacy lock-file pool
+ * below serves Windows and is the fallback when kernel locking is unusable.
  *
  * Every Claude session runs its own bridge, and a GC-sized alc with six
  * analyzers takes 1-2 GB. On a 16 GB machine a handful of sessions compiling
@@ -17,13 +21,14 @@
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { acquireSharedSlot, sharedSlotDir } from "./sharedSlots.js";
 
 export const DEFAULT_MAX_PARALLEL_ALC = 2;
 
 export class SlotBusyError extends Error {
   constructor(waitedMs: number, slots: number) {
     super(
-      `BUSY: all ${slots} alc slot(s) stayed taken for ${Math.round(waitedMs / 1000)}s — other sessions are compiling. ` +
+      `BUSY: all ${slots} alc slot(s) stayed taken for ${Math.round(waitedMs / 1000)}s — other sessions are compiling or running tests. ` +
         "Retry later, or raise AL_BRIDGE_MAX_PARALLEL_ALC / AL_BRIDGE_SLOT_WAIT_MS.",
     );
     this.name = "SlotBusyError";
@@ -58,10 +63,21 @@ export interface SlotOptions {
   dir?: string;
   slots?: number;
   pollMs?: number;
+  /** Shared flock pool directory (Linux). Default: AL_RUNNER_LOCK_DIR or /tmp/al-runner-slots-<euid>. */
+  sharedDir?: string;
+  /** Override process.platform. */
+  platform?: NodeJS.Platform;
+  /** flock(1) binary, default "flock". */
+  flockPath?: string;
+  /** Cadence of repeated wait notices, default WAIT_NOTICE_MS. */
+  noticeEveryMs?: number;
 }
 
 export interface Slot {
   release(): void;
+  backend: "flock" | "legacy";
+  /** Set when the shared cap could not be enforced and the legacy pool was used instead. */
+  warning?: string;
 }
 
 export function pidAlive(pid: number): boolean {
@@ -108,11 +124,71 @@ function tryClaimOnce(file: string): boolean {
   return true;
 }
 
-/** Wait for a free slot. Resolves to a handle whose release() is idempotent. */
+/** Default cadence of the "still waiting" notice. */
+export const WAIT_NOTICE_MS = 15_000;
+
+/**
+ * Wait for a free slot. Resolves to a handle whose release() is idempotent.
+ * Linux: the shared kernel-flock pool (also used by the al-runner wrapper); an
+ * unusable directory or flock falls back to the legacy pool with a warning.
+ * Other platforms: the legacy pool, unchanged.
+ */
 export async function acquireAlcSlot(opts: SlotOptions): Promise<Slot> {
+  const platform = opts.platform ?? process.platform;
+  if (platform !== "linux") return acquireLegacySlot(opts);
+
+  const slots = opts.slots ?? maxParallelAlc();
+  const pollMs = opts.pollMs ?? 1000;
+  const noticeEveryMs = opts.noticeEveryMs ?? WAIT_NOTICE_MS;
+  const sharedDir = opts.sharedDir ?? sharedSlotDir();
+  const started = Date.now();
+  let lastNotice = 0;
+
+  for (;;) {
+    if (opts.signal?.aborted) throw new CancelledError("waiting for an alc slot");
+    const pass = await acquireSharedSlot(sharedDir, slots, opts.flockPath, (m) =>
+      opts.onWait?.(`shared slot pool: ${m}`),
+    );
+    if (pass.state === "held") {
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        pass.release();
+      };
+      if (opts.signal?.aborted) {
+        release();
+        throw new CancelledError("waiting for an alc slot");
+      }
+      return { release, backend: "flock" };
+    }
+    if (pass.state === "unusable") {
+      const waited = Date.now() - started;
+      const remaining = opts.waitMs > 0 ? Math.max(1, opts.waitMs - waited) : 0;
+      const slot = await acquireLegacySlot({ ...opts, waitMs: remaining });
+      return {
+        ...slot,
+        warning:
+          `shared heavy-job cap NOT enforced (${pass.reason}); alc runs are capped among bridges only, ` +
+          `test runs are not counted (AL_BRIDGE_MAX_PARALLEL_ALC=${slots})`,
+      };
+    }
+    const waited = Date.now() - started;
+    if (opts.waitMs > 0 && waited >= opts.waitMs) throw new SlotBusyError(waited, slots);
+    if (opts.onWait && (lastNotice === 0 || Date.now() - lastNotice >= noticeEveryMs)) {
+      lastNotice = Date.now();
+      opts.onWait(`waiting for an alc slot (${slots} in use by other sessions or test runs, ${Math.round(waited / 1000)}s so far)`);
+    }
+    await sleep(pollMs, opts.signal);
+  }
+}
+
+/** The pre-shared pool: O_EXCL lock files with pid + stale-age reclaim (Windows, and the Linux fallback). */
+async function acquireLegacySlot(opts: SlotOptions): Promise<Slot> {
   const dir = opts.dir ?? slotDir();
   const slots = opts.slots ?? maxParallelAlc();
   const pollMs = opts.pollMs ?? 1000;
+  const noticeEveryMs = opts.noticeEveryMs ?? WAIT_NOTICE_MS;
   mkdirSync(dir, { recursive: true });
   const started = Date.now();
   let lastNotice = 0;
@@ -124,6 +200,7 @@ export async function acquireAlcSlot(opts: SlotOptions): Promise<Slot> {
       if (tryClaim(file, opts.staleMs)) {
         let released = false;
         return {
+          backend: "legacy",
           release() {
             if (released) return;
             released = true;
@@ -134,7 +211,7 @@ export async function acquireAlcSlot(opts: SlotOptions): Promise<Slot> {
     }
     const waited = Date.now() - started;
     if (opts.waitMs > 0 && waited >= opts.waitMs) throw new SlotBusyError(waited, slots);
-    if (opts.onWait && (lastNotice === 0 || Date.now() - lastNotice >= 15_000)) {
+    if (opts.onWait && (lastNotice === 0 || Date.now() - lastNotice >= noticeEveryMs)) {
       lastNotice = Date.now();
       opts.onWait(`waiting for an alc slot (${slots} in use by other sessions, ${Math.round(waited / 1000)}s so far)`);
     }
