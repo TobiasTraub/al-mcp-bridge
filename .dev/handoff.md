@@ -1,0 +1,2 @@
+Issue #2 is addressed by two draft PRs: TobiasTraub/al-mcp-bridge#3 (bridge) and socitas-gmbh/claude-trto#11 (al-runner wrapper, trto-al 6.13.0).
+On Linux, bridge compiles and wrapper test runs now share one flock slot pool; AL_BRIDGE_MAX_PARALLEL_ALC (default 2) is the total for both, AL_RUNNER_SLOTS is ignored with a stderr line. Both PRs must be merged and bridges/wrappers restarted. Nothing was posted to the issue.

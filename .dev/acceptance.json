@@ -2,92 +2,92 @@
   {
     "id": "AC1",
     "ears": "WHEN, on Linux, the total is N and N heavy jobs in any mix of bridge compiles and wrapper test runs hold slots THE SYSTEM SHALL make the next compile or test run wait. (M1)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC1 + al_runner test_pool_AC1",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC2",
     "ears": "WHEN, on Linux, a slot frees while both a compile and a test run are waiting THE SYSTEM SHALL let a waiter take it, whichever kind it is, so each kind can use every slot of the total. (M1)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC2 + test_pool_AC2",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC3",
     "ears": "IF, on Linux, a slot holder of either kind is killed with SIGKILL THEN THE SYSTEM SHALL let the next caller of either kind take that slot without manual cleanup and without waiting for a stale age. (M2)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC3 + test_pool_AC3",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC4",
     "ears": "WHEN, on Linux, only `AL_BRIDGE_MAX_PARALLEL_ALC` is set to N THE SYSTEM SHALL cap bridge compiles and wrapper test runs together at N. (M3)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC4 + test_pool_AC4",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC5",
     "ears": "WHEN, on Linux, no budget setting is set THE SYSTEM SHALL cap bridge compiles and wrapper test runs together at 2. (M3)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC5 + test_pool_AC5",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC6",
     "ears": "WHEN `AL_RUNNER_SLOTS` is set THE SYSTEM SHALL leave the total unchanged and print one stderr line naming the setting that governs it. (M4)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "test_al_runner.py test_pool_AC6",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC7",
     "ears": "WHEN a bridge compile or a wrapper test run has to wait for a slot THE SYSTEM SHALL emit a progress notice when the wait starts and at least every 15 s until it ends. (M5)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC7",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC8",
     "ears": "IF a bridge compile's wait for a slot times out THEN THE SYSTEM SHALL return a BUSY result carrying no compile diagnostics. (M6)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC8",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC9",
     "ears": "IF a wrapper test run's wait for a slot times out THEN THE SYSTEM SHALL exit 75 with a BUSY line on stderr and not start the runner. (M6)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "test_al_runner.py test_pool_AC9 + test_AC3_busy_after_timeout",
+    "evidence": "behaviour-preserving; wrapper suite 41/41 green after change, red-proofed by mutation reasoning"
   },
   {
     "id": "AC10",
     "ears": "IF, on Linux, the bridge and the wrapper are configured with different totals A < B THEN THE SYSTEM SHALL never hold more than B slots at once. (N2)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC10",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC11",
     "ears": "IF the bridge or the wrapper cannot enforce the shared cap THEN THE SYSTEM SHALL report that in the bridge's compile output / the wrapper's stderr rather than run silently uncapped. (N3)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC11",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC12",
     "ears": "WHEN the bridge runs on Windows THE SYSTEM SHALL keep capping concurrent alc runs at `AL_BRIDGE_MAX_PARALLEL_ALC` as today. (N1)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "sharedSlots.test.mjs AC12 + compileDeltaCache slot tests (win32)",
+    "evidence": "red before code (bridge 25/25 red, wrapper 29/41 red) -> green (bridge 119/119, wrapper 41/41)"
   },
   {
     "id": "AC13",
     "ears": "WHEN the wrapper is called in a mode that takes no slot today THE SYSTEM SHALL start the runner at once even with every slot taken. (N4)",
-    "status": "failing",
-    "test": null,
-    "evidence": null
+    "status": "passing",
+    "test": "test_al_runner.py test_pool_AC13",
+    "evidence": "behaviour-preserving; wrapper suite 41/41 green after change, red-proofed by mutation reasoning"
   }
 ]
