@@ -14,5 +14,6 @@ phase: spec-approved
 last_step: handoff
 ac_hash: 0f0e2586ccf5bf9e
 spec_approved: yes
+companion_repo: socitas-gmbh/claude-trto (trto-al/scripts/al-runner/al-runner + test_al_runner.py; its own CLAUDE.md/version-bump rules apply; clone ~/so-vm/claude-trto, branch off main)
 tags: mcp, al-runner, performance
 worktree: /home/trto/so-vm/al-mcp-bridge--2-share-heavy-job-slot-pool
