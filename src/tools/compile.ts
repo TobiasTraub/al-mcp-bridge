@@ -285,7 +285,7 @@ export function createCompile(config: BridgeConfig) {
     // handled by Roslyn's AssemblyLoadContext, which is why the bridge instead
     // prepends common helper DLLs (Analyzers.Common, ALCops.Common, …) as
     // explicit /analyzer: entries via augmentWithAnalyzerSiblings in config.ts.
-    const { diagnostics, exitCode, stdout, stderr } = await runAlcCompile({
+    const { diagnostics, exitCode, stdout, stderr, slotWarning } = await runAlcCompile({
       alcPath,
       projectPath,
       outputPath: input.outputPath ? resolve(input.outputPath) : undefined,
@@ -317,15 +317,17 @@ export function createCompile(config: BridgeConfig) {
     });
     // Never drop a configured analyzer silently: say which ones did not run.
     const skipped = input.analyzers !== undefined ? [] : projectSettings.skippedAnalyzers ?? [];
-    return skipped.length > 0
-      ? {
-          ...result,
-          skippedAnalyzers: skipped,
-          warning:
-            `${skipped.length} configured analyzer(s) were NOT loaded, so their rules did not run: ` +
-            skipped.map((s) => `${s.entry} (${s.reason})`).join("; "),
-        }
-      : result;
+    const withSkipped =
+      skipped.length > 0
+        ? {
+            ...result,
+            skippedAnalyzers: skipped,
+            warning:
+              `${skipped.length} configured analyzer(s) were NOT loaded, so their rules did not run: ` +
+              skipped.map((s) => `${s.entry} (${s.reason})`).join("; "),
+          }
+        : result;
+    return withSlotWarning(withSkipped, slotWarning);
   };
 }
 
@@ -364,6 +366,8 @@ export interface AlcCompileRun {
   /** False when alc wrote no errorlog at all (crash / bad args), as opposed
    *  to "compiled with errors". */
   errorLogWritten: boolean;
+  /** Set when the shared heavy-job cap could not be enforced for this run. */
+  slotWarning?: string;
 }
 
 /**
@@ -378,54 +382,69 @@ export async function runAlcCompile(p: AlcCompileParams): Promise<AlcCompileRun>
     signal: p.signal,
     onWait: p.onWait,
   });
-  const tmpDir = mkdtempSync(join(tmpdir(), "al-compile-"));
-  const errorLogPath = join(tmpDir, "errors.json");
-
-  const args: string[] = [`/project:${p.projectPath}`, `/errorlog:${errorLogPath}`];
-  if (p.outputPath) {
-    args.push(`/out:${p.outputPath}`);
-  }
-  for (const c of p.packageCachePaths) {
-    args.push(`/packagecachepath:${c}`);
-  }
-  for (const c of p.assemblyProbingPaths) {
-    args.push(`/assemblyprobingpaths:${c}`);
-  }
-  if (p.analyzers && p.analyzers.length > 0) {
-    // alc accepts one /analyzer:<path> per DLL.
-    for (const a of p.analyzers) args.push(`/analyzer:${a}`);
-  }
-  if (p.ruleSet) {
-    args.push(`/ruleset:${p.ruleSet}`);
-  }
-  if (p.enableExternalRulesets) {
-    // alc ignores the bare flag; only the explicit :true form lifts BlockedExternalRulesets (AL1033).
-    args.push("/enableexternalrulesets:true");
-  }
-  if (p.generateCode === false) {
-    args.push("/generatecode-");
-  }
-  if (p.warningsAsErrors) {
-    args.push("/warnaserror+");
-  }
-  if (p.continueOnError) {
-    args.push("/continuebuildonerror+");
-  }
-
+  let tmpDir: string | undefined;
   try {
+    tmpDir = mkdtempSync(join(tmpdir(), "al-compile-"));
+    const errorLogPath = join(tmpDir, "errors.json");
+
+    const args: string[] = [`/project:${p.projectPath}`, `/errorlog:${errorLogPath}`];
+    if (p.outputPath) {
+      args.push(`/out:${p.outputPath}`);
+    }
+    for (const c of p.packageCachePaths) {
+      args.push(`/packagecachepath:${c}`);
+    }
+    for (const c of p.assemblyProbingPaths) {
+      args.push(`/assemblyprobingpaths:${c}`);
+    }
+    if (p.analyzers && p.analyzers.length > 0) {
+      // alc accepts one /analyzer:<path> per DLL.
+      for (const a of p.analyzers) args.push(`/analyzer:${a}`);
+    }
+    if (p.ruleSet) {
+      args.push(`/ruleset:${p.ruleSet}`);
+    }
+    if (p.enableExternalRulesets) {
+      // alc ignores the bare flag; only the explicit :true form lifts BlockedExternalRulesets (AL1033).
+      args.push("/enableexternalrulesets:true");
+    }
+    if (p.generateCode === false) {
+      args.push("/generatecode-");
+    }
+    if (p.warningsAsErrors) {
+      args.push("/warnaserror+");
+    }
+    if (p.continueOnError) {
+      args.push("/continuebuildonerror+");
+    }
+
     const res = await runAlc(p.alcPath, args, p.timeoutMs, p.maxOutputChars, p.signal);
     // Read the errorlog before cleanup. If alc crashed there may be none.
     const errorLogWritten = existsSync(errorLogPath);
     const diagnostics = errorLogWritten ? parseErrorLog(readFileSync(errorLogPath, "utf8")) : [];
-    return { diagnostics, exitCode: res.exitCode, stdout: res.stdout, stderr: res.stderr, errorLogWritten };
+    return {
+      diagnostics,
+      exitCode: res.exitCode,
+      stdout: res.stdout,
+      stderr: res.stderr,
+      errorLogWritten,
+      ...(slot.warning ? { slotWarning: slot.warning } : {}),
+    };
   } finally {
     slot.release();
     try {
-      rmSync(tmpDir, { recursive: true, force: true });
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
     } catch {
       // best-effort cleanup — tmpdir entries expire on reboot anyway
     }
   }
+}
+
+/** Join a slot warning into the result's `warning` field (existing text first). Pure. */
+export function withSlotWarning<T extends object>(result: T, slotWarning?: string): T & { warning?: string } {
+  if (!slotWarning) return result;
+  const prev = (result as { warning?: unknown }).warning;
+  return { ...result, warning: typeof prev === "string" && prev ? `${prev}; ${slotWarning}` : slotWarning };
 }
 
 /** How long to wait for a free alc slot: AL_BRIDGE_SLOT_WAIT_MS, else one alc deadline. */

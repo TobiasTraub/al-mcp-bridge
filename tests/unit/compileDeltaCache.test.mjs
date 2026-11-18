@@ -26,7 +26,7 @@ const tmp = (p) => mkdtempSync(join(tmpdir(), p));
 test("slots: N holders at most; release frees a slot; release is idempotent", async () => {
   const dir = tmp("al-slots-");
   try {
-    const opts = { dir, slots: 2, staleMs: 60_000, waitMs: 300, pollMs: 20 };
+    const opts = { dir, slots: 2, staleMs: 60_000, waitMs: 300, pollMs: 20, platform: "win32" };
     const a = await acquireAlcSlot(opts);
     const b = await acquireAlcSlot(opts);
     await assert.rejects(() => acquireAlcSlot(opts), SlotBusyError);
@@ -45,7 +45,7 @@ test("slots: a lock left by a dead pid is reclaimed", async () => {
   const dir = tmp("al-slots-");
   try {
     writeFileSync(join(dir, "slot-0.lock"), JSON.stringify({ pid: 999999, at: Date.now() }));
-    const s = await acquireAlcSlot({ dir, slots: 1, staleMs: 60_000, waitMs: 500, pollMs: 20 });
+    const s = await acquireAlcSlot({ dir, slots: 1, staleMs: 60_000, waitMs: 500, pollMs: 20, platform: "win32" });
     s.release();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -56,7 +56,7 @@ test("slots: a lock older than staleMs is reclaimed even if its pid lives", asyn
   const dir = tmp("al-slots-");
   try {
     writeFileSync(join(dir, "slot-0.lock"), JSON.stringify({ pid: process.pid, at: Date.now() - 10_000 }));
-    const s = await acquireAlcSlot({ dir, slots: 1, staleMs: 1_000, waitMs: 500, pollMs: 20 });
+    const s = await acquireAlcSlot({ dir, slots: 1, staleMs: 1_000, waitMs: 500, pollMs: 20, platform: "win32" });
     s.release();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -66,10 +66,10 @@ test("slots: a lock older than staleMs is reclaimed even if its pid lives", asyn
 test("slots: waiting reports progress and an abort cancels the wait", async () => {
   const dir = tmp("al-slots-");
   try {
-    const held = await acquireAlcSlot({ dir, slots: 1, staleMs: 60_000, waitMs: 0 });
+    const held = await acquireAlcSlot({ dir, slots: 1, staleMs: 60_000, waitMs: 0, platform: "win32" });
     const ac = new AbortController();
     const notes = [];
-    const p = acquireAlcSlot({ dir, slots: 1, staleMs: 60_000, waitMs: 0, pollMs: 20, signal: ac.signal, onWait: (m) => notes.push(m) });
+    const p = acquireAlcSlot({ dir, slots: 1, staleMs: 60_000, waitMs: 0, pollMs: 20, platform: "win32", signal: ac.signal, onWait: (m) => notes.push(m) });
     setTimeout(() => ac.abort(), 80);
     await assert.rejects(p, CancelledError);
     assert.ok(notes.length >= 1 && /alc slot/.test(notes[0]));
